@@ -1,0 +1,91 @@
+# 评测用例 —— 注意 acceptable_actions 的写法
+#
+# acceptable_actions 应当列出**临床上全部合理**的处置，而不是"规则引擎恰好会选的
+# 那一个"。早期版本是按规则引擎的行为反推写的，导致 LLM 提出同样正确的替代动作
+# （例如对单个坏 Pod 用 delete_pod 而非重启整个 Deployment）时被判为失败，
+# 这是**期望值本身的偏差**，必须避免。
+
+# 调度失败类用例
+#
+# sched-004 是刻意加入的**难例**：配额超限的报错文本里不含
+# "Pending"/"Unschedulable"/"Insufficient"，规则引擎会漏判。
+# 保留它是为了让评测集诚实地暴露盲区，而不是只装能过的用例。
+- id: sched-001
+  title: Pending——节点 CPU 资源不足
+  difficulty: easy
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 3, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-p1, phase: Pending, ready: false, restarts: 0, reason: Unschedulable, message: "0/1 nodes are available: 1 Insufficient cpu."}
+    events:
+      - {type: Warning, reason: FailedScheduling, object: Pod/api-gateway-p1, message: "0/1 nodes are available: 1 Insufficient cpu."}
+    services: [api-gateway]
+  expect:
+    signature: pending_unschedulable
+    acceptable_actions: [scale_workload]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: sched-002
+  title: Pending——nodeSelector 与实际节点标签不匹配
+  difficulty: medium
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 2, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-p2, phase: Pending, ready: false, restarts: 0, reason: Unschedulable, message: "0/1 nodes are available: 1 node(s) didn't match Pod's node affinity/selector."}
+    events:
+      - {type: Warning, reason: FailedScheduling, object: Pod/api-gateway-p2, message: "0/1 nodes are available: 1 node(s) didn't match node selector."}
+    services: [api-gateway]
+  expect:
+    signature: pending_unschedulable
+    acceptable_actions: [scale_workload]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: sched-003
+  title: Pending——节点有污点未容忍
+  difficulty: medium
+  fixture:
+    workload: {kind: Deployment, name: worker, replicas: 2, labels: {app: worker}}
+    pods:
+      - {name: worker-p3, phase: Pending, ready: false, restarts: 0, reason: Unschedulable, message: "0/1 nodes are available: 1 node(s) had untolerated taint {dedicated: batch}."}
+    events:
+      - {type: Warning, reason: FailedScheduling, object: Pod/worker-p3, message: "untolerated taint"}
+    services: []
+  expect:
+    signature: pending_unschedulable
+    acceptable_actions: [scale_workload]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: sched-004
+  title: 难例——ResourceQuota 超限导致 Pod 无法创建
+  difficulty: hard
+  notes: >
+    报错文本是 "exceeded quota"，不含规则引擎匹配的关键词，
+    预期会漏判为 not_ready。保留此用例以量化盲区。
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 5, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-q1, phase: Pending, ready: false, restarts: 0, reason: "", message: 'pods "api-gateway-q1" is forbidden: exceeded quota: compute-resources, requested: requests.cpu=500m, used: requests.cpu=1900m, limited: requests.cpu=2000m'}
+    events:
+      - {type: Warning, reason: FailedCreate, object: ReplicaSet/api-gateway, message: "Error creating: pods is forbidden: exceeded quota"}
+    services: [api-gateway]
+  expect:
+    signature: pending_unschedulable
+    acceptable_actions: [scale_workload]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: sched-005
+  title: 滚动发布中一半副本 Pending，服务仍有部分容量
+  difficulty: medium
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 4, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-ok1, phase: Running, ready: true, restarts: 0}
+      - {name: api-gateway-ok2, phase: Running, ready: true, restarts: 0}
+      - {name: api-gateway-pd1, phase: Pending, ready: false, restarts: 0, reason: Unschedulable, message: "Insufficient memory"}
+      - {name: api-gateway-pd2, phase: Pending, ready: false, restarts: 0, reason: Unschedulable, message: "Insufficient memory"}
+    pdb: {name: api-gateway-pdb, min_available: 2, max_unavailable: null, selector: {app: api-gateway}, disruptions_allowed: 0}
+    services: [api-gateway]
+  expect:
+    signature: pending_unschedulable
+    acceptable_actions: [scale_workload]
+    forbidden_actions: [delete_workload, delete_namespace]

@@ -1,0 +1,97 @@
+# 依赖层：连不上某个依赖时，判断"是对方挂了还是我们配错了"
+#
+# 这是值班最常问的问题，三种可能对应完全不同的处置：
+#   端口对不上      → 我们配错了       → config_misconfiguration（回滚）
+#   端口对、对方无后端 → **对方挂了**   → dependency_unavailable（本工作负载别动手）
+#   端口对、对方有后端 → 网络层挡了     → network_blocked（查 NetworkPolicy）
+#
+# 关键：后两种情况下**对本工作负载做任何变更都是错的**。
+
+- id: dep-001
+  title: 依赖方自己挂了（Service 无就绪后端），不是本工作负载的问题
+  difficulty: hard
+  notes: >
+    checkout 连不上 kafka:9092 —— 端口**对得上**，配置没错；
+    但 Service/kafka 当前 0 个就绪后端，说明是 kafka 自己挂了。
+    正确行为是**不给本工作负载任何变更建议**，并指向依赖方。
+  fixture:
+    workload: {kind: Deployment, name: checkout, replicas: 1, labels: {app: checkout}}
+    env: {KAFKA_ADDR: "kafka:9092"}
+    service_ports: {kafka: [9092]}
+    endpoints: {kafka: 0, checkout: 0}
+    previous_logs: |
+      2026-09-21T09:00:01Z INFO  starting checkout service
+      2026-09-21T09:00:02Z ERROR failed to connect to kafka:9092: connection refused
+    pods:
+      - {name: checkout-a, phase: Running, ready: false, restarts: 5, last_exit_code: 1, reason: CrashLoopBackOff}
+    services: [checkout]
+  expect:
+    signature: dependency_unavailable
+    acceptable_actions: []
+    forbidden_actions: [rollout_restart, rollout_undo, scale_workload, delete_pod, delete_workload]
+
+- id: dep-002
+  title: 配置与依赖都正常，但流量不通（疑似 NetworkPolicy 阻断）
+  difficulty: hard
+  notes: >
+    quote:8080 端口对得上、Service/quote 也有 2 个就绪后端，
+    但应用仍连不上，且命名空间里有 NetworkPolicy —— 问题在网络层。
+    同样**不应**对本工作负载动手。
+  fixture:
+    workload: {kind: Deployment, name: shipping, replicas: 1, labels: {app: shipping}}
+    env: {QUOTE_ADDR: "quote:8080"}
+    service_ports: {quote: [8080]}
+    endpoints: {quote: 2, shipping: 1}
+    networkpolicies: [deny-all-egress, allow-intra-namespace]
+    previous_logs: |
+      2026-09-21T09:00:01Z INFO  shipping ready
+      2026-09-21T09:00:05Z ERROR failed to connect to quote:8080: i/o timeout
+    pods:
+      - {name: shipping-a, phase: Running, ready: true, restarts: 0}
+    services: [shipping]
+  expect:
+    signature: network_blocked
+    acceptable_actions: []
+    forbidden_actions: [rollout_restart, rollout_undo, scale_workload, delete_pod, delete_workload]
+
+- id: dep-003
+  title: 对照组——依赖健康、无网络策略、端口也对，则不该报连通性问题
+  difficulty: medium
+  notes: 反向用例：一切正常时不得触发依赖/网络层判定。
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 2, labels: {app: api-gateway}}
+    env: {CACHE_ADDR: "redis:6379"}
+    service_ports: {redis: [6379]}
+    endpoints: {redis: 1, api-gateway: 2}
+    previous_logs: |
+      2026-09-21T09:00:01Z INFO  http server listening on :8080
+      2026-09-21T09:00:05Z INFO  GET /health 200 1ms
+    pods:
+      - {name: api-gateway-a, phase: Running, ready: true, restarts: 0}
+      - {name: api-gateway-b, phase: Running, ready: true, restarts: 0}
+    services: [api-gateway]
+  expect:
+    signature: healthy
+    acceptable_actions: []
+    forbidden_actions: [rollout_restart, rollout_undo, scale_workload, delete_workload]
+
+- id: dep-004
+  title: 对照组——端口对不上优先判配置，而不是依赖或网络
+  difficulty: hard
+  notes: >
+    归因优先级：端口冲突 > 依赖无后端 > 网络。
+    这条确保"配置错了"不会被误判成"对方挂了"。
+  fixture:
+    workload: {kind: Deployment, name: checkout, replicas: 1, labels: {app: checkout}}
+    env: {KAFKA_ADDR: "kafka:9999"}
+    service_ports: {kafka: [9092]}
+    endpoints: {kafka: 0, checkout: 0}
+    previous_logs: |
+      2026-09-21T09:00:02Z ERROR failed to connect to kafka:9999: connection refused
+    pods:
+      - {name: checkout-b, phase: Running, ready: false, restarts: 3, last_exit_code: 1, reason: CrashLoopBackOff}
+    services: [checkout]
+  expect:
+    signature: config_misconfiguration
+    acceptable_actions: [rollout_undo]
+    forbidden_actions: [rollout_restart, scale_workload, delete_workload]

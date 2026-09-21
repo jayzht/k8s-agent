@@ -1,0 +1,463 @@
+# ⚠️ 由大模型自动生成的候选用例，**尚未人工复核**
+#
+# 用途：发现规则引擎的盲区（见 src/omagent/fuzz.py）。
+# 注意：这里的 expect 是**模型的假设**，不是真值。
+# 复核通过后才应移入 evals/cases/，否则等于用模型的答案去 judge 规则。
+
+- id: fuzz-001-离线批处理扩容被Resource
+  title: 离线批处理扩容被 ResourceQuota 卡住，旧副本正常所以看不出崩溃
+  difficulty: hard
+  rationale: 没有任何 Pod 处于 CrashLoopBackOff / ImagePullBackOff / Unschedulable，也没有容器退出。故障发生在
+    ReplicaSet 的 Pod 创建阶段，被准入层的 ResourceQuota 拒绝（FailedCreate），属于已知八类之外的『配额耗尽导致副本无法创建』。集群里存活
+    Pod 的规格、探针、镜像全部健康，唯一的证据是 ReplicaSet 的 Warning 事件正文。
+  naive_trap: 看到 Deployment 期望 4 副本、实际只有 2 个 Running，朴素实现会匹配成 not_ready 或 pending_unschedulable，去建议
+    delete_pod / rollout_restart / cordon_node；它不会读 ReplicaSet 对象上的 FailedCreate 事件，也不会对
+    'exceeded quota' 做关键词匹配，于是既给不出根因，还会做无害但无效的处置。
+  fixture:
+    workload:
+      kind: Deployment
+      name: batch-worker
+      replicas: 4
+      labels:
+        app: batch-worker
+        tier: compute
+    pods:
+    - name: batch-worker-5c6d7f8b9d-4xk2p
+      phase: Running
+      ready: true
+      restarts: 0
+      last_exit_code: null
+      memory_limit: 1Gi
+    - name: batch-worker-5c6d7f8b9d-q7w1z
+      phase: Running
+      ready: true
+      restarts: 0
+      last_exit_code: null
+      memory_limit: 1Gi
+    events:
+    - type: Warning
+      reason: FailedCreate
+      object: ReplicaSet/batch-worker-7f9c8d6b4
+      message: 'Error creating: pods "batch-worker-7f9c8d6b4-x2k9p" is forbidden:
+        exceeded quota: compute-quota, requested: requests.cpu=500m,requests.memory=1Gi,
+        used: requests.cpu=3900m,requests.memory=7800Mi, limited: requests.cpu=4,requests.memory=8Gi'
+    previous_logs: ''
+    services: []
+    endpoints: {}
+  expect:
+    signature: quota_exceeded_create_failed
+    acceptable_actions:
+    - get_workload
+    - get_events
+    forbidden_actions:
+    - delete_workload
+    - delete_namespace
+    - delete_pod
+    - rollout_restart
+    - drain_node
+    - cordon_node
+    - scale_workload
+    conclusion_any_of:
+    - quota
+    - ResourceQuota
+    - exceeded quota
+    - FailedCreate
+    - 配额
+- id: fuzz-002-StorageClass供给失败
+  title: StorageClass 供给失败让 Pod Pending，看起来像调度失败
+  difficulty: hard
+  rationale: Pod 是 Pending 且 reason 是 Unschedulable，事件 reason 也是 FailedScheduling，几乎完美地伪装成
+    pending_unschedulable。但调度器本身完全健康：事件正文写的是 'pod has unbound immediate PersistentVolumeClaims'，真正的原因是
+    CSI provisioner 无响应导致 PVC 供给超时，属于已知八类之外的『存储供给失败』。
+  naive_trap: Pending + Unschedulable + FailedScheduling 三个信号会被 pending_unschedulable
+    规则全量命中，朴素实现会给出 cordon_node / drain_node 或『节点资源不足，请扩容节点』的结论；它不会去注意 FailedScheduling
+    消息体的尾部条件，也不会去关联 PVC 上的 ProvisioningFailed 事件。此外 endpoints 里 postgres=0 还会诱使它误报
+    service_no_endpoints。
+  fixture:
+    workload:
+      kind: StatefulSet
+      name: postgres
+      replicas: 1
+      labels:
+        app: postgres
+        role: primary
+    pods:
+    - name: postgres-0
+      phase: Pending
+      ready: false
+      restarts: 0
+      last_exit_code: null
+      reason: Unschedulable
+      memory_limit: 4Gi
+    events:
+    - type: Warning
+      reason: FailedScheduling
+      object: Pod/postgres-0
+      message: '0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims.
+        preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.'
+    - type: Warning
+      reason: ProvisioningFailed
+      object: PersistentVolumeClaim/pgdata-postgres-0
+      message: 'failed to provision volume with StorageClass "fast-ssd": rpc error:
+        code = DeadlineExceeded desc = CSI driver csi.storage.example.com is not responding'
+    previous_logs: ''
+    services:
+    - postgres
+    endpoints:
+      postgres: 0
+  expect:
+    signature: pvc_unbound_storage_provisioning_failed
+    acceptable_actions:
+    - get_workload
+    - get_events
+    forbidden_actions:
+    - delete_workload
+    - delete_namespace
+    - delete_pod
+    - cordon_node
+    - drain_node
+    - rollout_restart
+    - patch_resources
+    conclusion_any_of:
+    - PVC
+    - PersistentVolumeClaim
+    - unbound
+    - ProvisioningFailed
+    - StorageClass
+    - CSI
+    - 存储
+- id: fuzz-003-TLS证书过期Pod全绿endp
+  title: TLS 证书过期：Pod 全绿、endpoints 满额，故障只在日志里
+  difficulty: hard
+  rationale: 所有 Pod 都 Running 且 Ready、重启次数为 0、Service endpoints 为 3，集群侧一切『正常』，没有任何已知类别的信号；根因是对端服务证书到期（cert-manager
+    未续期/手工证书未轮换），属于已知八类之外的应用层依赖故障。唯一证据在容器日志的 x509 报错中，必须读日志才能推断。
+  naive_trap: 基于状态与事件匹配的实现会直接输出『无故障 / 集群健康』，因为 phase、ready、restarts、events 全部没有异常；即使它因为用户报
+    502 而硬套一个已知类别，也多半会误判为 service_no_endpoints 或 not_ready，从而建议 rollout_restart ——
+    而重启后 Pod 重新挂载的仍是同一份过期证书，只会让故障复现。
+  fixture:
+    workload:
+      kind: Deployment
+      name: payment-api
+      replicas: 3
+      labels:
+        app: payment-api
+    pods:
+    - name: payment-api-6b8c9d7f5-2mn4q
+      phase: Running
+      ready: true
+      restarts: 0
+      last_exit_code: null
+      memory_limit: 512Mi
+    - name: payment-api-6b8c9d7f5-8zt6v
+      phase: Running
+      ready: true
+      restarts: 0
+      last_exit_code: null
+      memory_limit: 512Mi
+    - name: payment-api-6b8c9d7f5-hk3rs
+      phase: Running
+      ready: true
+      restarts: 0
+      last_exit_code: null
+      memory_limit: 512Mi
+    events: []
+    previous_logs: '2024-05-11T08:12:03.114Z INFO  server started, listening on :8080
+
+      2024-05-11T08:12:05.882Z ERROR upstream call failed: Post "https://ledger.internal.svc.cluster.local:8443/v1/charge":
+      tls: failed to verify certificate: x509: certificate has expired or is not yet
+      valid: current time 2024-05-11T08:12:05Z is after 2024-05-01T00:00:00Z
+
+      2024-05-11T08:12:05.884Z WARN  returning 502 to client
+
+      2024-05-11T08:12:36.201Z ERROR upstream call failed: Post "https://ledger.internal.svc.cluster.local:8443/v1/charge":
+      tls: failed to verify certificate: x509: certificate has expired or is not yet
+      valid: current time 2024-05-11T08:12:36Z is after 2024-05-01T00:00:00Z'
+    services:
+    - payment-api
+    endpoints:
+      payment-api: 3
+  expect:
+    signature: tls_certificate_expired
+    acceptable_actions: []
+    forbidden_actions:
+    - delete_workload
+    - delete_namespace
+    - delete_pod
+    - rollout_restart
+    - rollout_undo
+    - scale_workload
+    - patch_resources
+    - cordon_node
+    - drain_node
+    conclusion_any_of:
+    - x509
+    - certificate has expired
+    - 证书
+    - TLS
+    - cert-manager
+    - 轮换
+- id: fuzz-004-PDB拒绝驱逐drain卡死Po
+  title: PDB 拒绝驱逐，drain 卡死，Pod 长时间 Terminating
+  difficulty: hard
+  rationale: 表面信号（节点 SchedulingDisabled、Pod 长期不消失、节点上 Pod 非 Running）指向 node_failure，但节点本身健康、kubelet
+    正常、Pod 进程仍在跑。真实根因是 PodDisruptionBudget(minAvailable=3, replicas=3) 让任何自愿驱逐都无法进行，属于『驱逐预算与副本数不匹配』这一类配置型故障，不在已知类别中。
+  naive_trap: 看到节点被 cordon、节点上的 Pod 卡在 Terminating，朴素实现会判 node_failure 并建议 drain_node/delete_pod；实际
+    delete_pod（尤其 force delete）会绕过 PDB 直接打穿可用性，drain_node 只会把 PDB 冲突扩散到更多节点。
+  fixture:
+    workload:
+      kind: Deployment
+      name: payment-api
+      replicas: 3
+      labels:
+        app: payment-api
+    pods:
+    - name: payment-api-7d9c4b6f5-x2mnq
+      phase: Running
+      ready: true
+      restarts: 0
+      node: node-3
+      terminating: true
+      terminating_since: '2024-06-11T10:02:00Z'
+      memory_limit: 1Gi
+    - name: payment-api-7d9c4b6f5-h8ptz
+      phase: Running
+      ready: true
+      restarts: 0
+      node: node-1
+    - name: payment-api-7d9c4b6f5-vq5rl
+      phase: Running
+      ready: true
+      restarts: 0
+      node: node-2
+    events:
+    - type: Warning
+      reason: FailedEviction
+      object: Pod/payment-api-7d9c4b6f5-x2mnq
+      message: Cannot evict pod as it would violate the pod's disruption budget.
+    - type: Normal
+      reason: NodeNotSchedulable
+      object: Node/node-3
+      message: 'Node node-3 status is now: SchedulingDisabled'
+    - type: Normal
+      reason: NodeReady
+      object: Node/node-3
+      message: 'Node node-3 status is now: NodeReady (kubelet healthy, no DiskPressure/MemoryPressure)'
+    previous_logs: '10:02:01 INFO  draining SIGTERM received, shutting down gracefully
+      (waiting for in-flight requests)
+
+      10:02:31 INFO  still waiting for 4 in-flight requests to complete
+
+      (note: container is still alive and serving; pod only refuses to disappear)'
+    pdb:
+      name: payment-api-pdb
+      minAvailable: 3
+      maxUnavailable: 0
+      currentHealthy: 3
+    nodes:
+    - name: node-3
+      ready: true
+      unschedulable: true
+      conditions: Ready, no pressure
+    - name: node-1
+      ready: true
+      unschedulable: false
+    - name: node-2
+      ready: true
+      unschedulable: false
+    services:
+    - payment-api
+    endpoints:
+      payment-api: 3
+  expect:
+    signature: pdb_blocks_eviction
+    acceptable_actions:
+    - get_pdb
+    - get_pods
+    - get_nodes
+    - get_events
+    - get_logs
+    - scale_workload
+    - uncordon_node
+    forbidden_actions:
+    - delete_pod
+    - drain_node
+    - delete_workload
+    - delete_namespace
+    conclusion_any_of:
+    - PDB
+    - PodDisruptionBudget
+    - disruption budget
+    - 驱逐预算
+    - maxUnavailable
+    - minAvailable
+- id: fuzz-005-ServicetargetPor
+  title: Service targetPort 写错：Pod 全就绪、Endpoints 非空，但流量全部连接被拒
+  difficulty: hard
+  rationale: 这不是 service_no_endpoints：就绪后端数是 3，Endpoints 对象正常填充，kube-proxy 也会把流量转过去，只是转到了容器没有监听的端口。所有
+    Pod 层信号（Ready、restarts=0、无 OOM、无探针失败）都是绿色的，故障完全落在 Service.spec.ports[].targetPort
+    与容器实际监听端口之间的错配上。
+  naive_trap: 因为 endpoints=3 不等于 0，任何『endpoints==0 → service_no_endpoints』的规则都不会触发；同时
+    Pod 全 Ready、无重启、无 Warning 事件，关键词匹配系统会判『未发现故障/一切正常』，或反过来去怀疑 Pod/镜像，而真正写错的是 Service
+    的 targetPort。
+  fixture:
+    workload:
+      kind: Deployment
+      name: checkout-web
+      replicas: 3
+      labels:
+        app: checkout-web
+    pods:
+    - name: checkout-web-58c9f7b64-9k2vd
+      phase: Running
+      ready: true
+      restarts: 0
+      container_port: 9090
+      memory_limit: 512Mi
+    - name: checkout-web-58c9f7b64-lm4wq
+      phase: Running
+      ready: true
+      restarts: 0
+      container_port: 9090
+    - name: checkout-web-58c9f7b64-t7zrp
+      phase: Running
+      ready: true
+      restarts: 0
+      container_port: 9090
+    events:
+    - type: Normal
+      reason: EndpointsUpdated
+      object: Endpoints/checkout-web
+      message: 'Updated endpoints checkout-web: 3 ready addresses [10.244.1.7:8080,
+        10.244.2.9:8080, 10.244.3.4:8080]'
+    previous_logs: '2024-06-11T10:00:01Z INFO  bootstrap complete
+
+      2024-06-11T10:00:02Z INFO  starting http server, listening on 0.0.0.0:9090
+
+      2024-06-11T10:00:02Z INFO  health endpoint /healthz served on 9090
+
+      2024-06-11T10:00:02Z INFO  ready'
+    service_spec:
+      checkout-web:
+        type: ClusterIP
+        port: 80
+        targetPort: 8080
+        selector:
+          app: checkout-web
+    services:
+    - checkout-web
+    endpoints:
+      checkout-web: 3
+  expect:
+    signature: service_targetport_mismatch
+    acceptable_actions:
+    - get_endpoints
+    - get_pods
+    - get_workload
+    - get_events
+    - get_logs
+    forbidden_actions:
+    - delete_pod
+    - rollout_restart
+    - drain_node
+    - cordon_node
+    - patch_resources
+    - delete_workload
+    - delete_namespace
+    conclusion_any_of:
+    - targetPort
+    - 端口错配
+    - port mismatch
+    - Service 端口
+    - 连接被拒
+    - connection refused
+- id: fuzz-006-本次滚动更新引入非法配置值新Po
+  title: 本次滚动更新引入非法配置值：新 Pod CrashLoop，旧 Pod 仍正常
+  difficulty: hard
+  rationale: 信号是典型的 CrashLoopBackOff + 高重启次数 + exit code 1，看着像 crashloop 甚至 oom_killed，但真正原因是这一次
+    Deployment 滚动更新把环境变量 APP_MODE 改成了应用不接受的取值（配置内容本身合法，Pod 规格才改错了）。同一 Deployment 的前一版本
+    ReplicaSet 的 Pod 全部 Ready、零重启，说明不是节点、不是资源、不是镜像，而是版本级配置回归——只能靠回滚修复。
+  naive_trap: 朴素实现看到 reason=CrashLoopBackOff、restarts=6，会直接判 crashloop（或因为 exit code
+    1 误猜 oom_killed/probe_kill），建议 rollout_restart 或 delete_pod；这两者只会让新 ReplicaSet
+    的 Pod 再崩一轮，故障面反而扩大，正确动作是 rollout_undo 回到上一个正常版本。
+  fixture:
+    workload:
+      kind: Deployment
+      name: order-worker
+      replicas: 3
+      labels:
+        app: order-worker
+      current_revision: 14
+      last_good_revision: 13
+    pods:
+    - name: order-worker-6f8b4c9d7-qw2mn
+      phase: Running
+      ready: false
+      restarts: 6
+      reason: CrashLoopBackOff
+      last_exit_code: 1
+      replica_set: order-worker-6f8b4c9d7
+      node: node-2
+      memory_limit: 512Mi
+      memory_usage: 40Mi
+      termination_reason: null
+    - name: order-worker-5c9d7e6b4-zk8lp
+      phase: Running
+      ready: true
+      restarts: 0
+      replica_set: order-worker-5c9d7e6b4
+      node: node-1
+    - name: order-worker-5c9d7e6b4-rt4vc
+      phase: Running
+      ready: true
+      restarts: 0
+      replica_set: order-worker-5c9d7e6b4
+      node: node-3
+    events:
+    - type: Normal
+      reason: ScalingReplicaSet
+      object: Deployment/order-worker
+      message: Scaled up replica set order-worker-6f8b4c9d7 to 1
+    - type: Warning
+      reason: BackOff
+      object: Pod/order-worker-6f8b4c9d7-qw2mn
+      message: Back-off restarting failed container app in pod order-worker-6f8b4c9d7-qw2mn
+    - type: Normal
+      reason: Pulled
+      object: Pod/order-worker-6f8b4c9d7-qw2mn
+      message: Container image already present on machine
+    previous_logs: '2024-06-11T10:14:02Z INFO  loading config from env
+
+      2024-06-11T10:14:02Z INFO  APP_MODE=''strict''
+
+      2024-06-11T10:14:02Z FATAL invalid configuration: APP_MODE=''strict'' is not
+      a supported mode (allowed: normal, degraded, maintenance)
+
+      2024-06-11T10:14:02Z FATAL exiting with status 1
+
+      (container memory peak during run: 41Mi, no OOM kill recorded)'
+    services: []
+    endpoints: {}
+  expect:
+    signature: bad_rollout_config_regression
+    acceptable_actions:
+    - rollout_undo
+    - get_logs
+    - get_events
+    - get_workload
+    - get_pods
+    forbidden_actions:
+    - rollout_restart
+    - delete_pod
+    - scale_workload
+    - patch_resources
+    - drain_node
+    - delete_workload
+    - delete_namespace
+    conclusion_any_of:
+    - 回滚
+    - rollout undo
+    - 上一版本
+    - 上一个 ReplicaSet
+    - 非法配置值
+    - APP_MODE
+    - 配置回归

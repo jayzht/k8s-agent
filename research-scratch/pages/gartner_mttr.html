@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Just a moment... | Gartner</title>
+<style>
+        body {
+            margin: 0;
+            font-family: "Graphik Web", Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.42857143;
+            color: #333;
+            background-color: #002856;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        * {
+            font-family: "Graphik Web", Arial, sans-serif;
+            -moz-font-feature-settings: "ss05";
+            -webkit-font-feature-settings: "ss05";
+            font-feature-settings: "ss05" on;
+            margin: 0;
+        }
+
+        a {
+            color: #0000d3;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        h1 {
+            font-size: 56px;
+            line-height: 60px;
+            font-weight: 700;
+            word-break: break-word;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 40px;
+            }
+            .backgroundText p {
+                font-size: 18px !important;
+            }
+        }
+
+        header {
+            padding-top: 30px;
+            height: 120px;
+            margin-bottom: 15px;
+            background-color: #FFFFFF;
+        }
+
+        .gartner-logo {
+            margin-left: 56px;
+        }
+
+        .logo {
+            height: auto;
+        }
+
+        .backgroundText {
+            color: #FFFFFF;
+            border: solid 1px #002856;
+            padding: 56px 56px;
+            border: 0;
+            font-size: 14px;
+            height: 80vh;
+        }
+
+        .backgroundText .description {
+            margin-bottom: 62px;
+        }
+
+        .backgroundText p {
+            font-size: 22px;
+            line-height: 34px;
+            font-weight: 400;
+            margin: 0;
+        }
+
+        article {
+            margin-top: 110px;
+        }
+
+        footer {
+            text-align: center;
+            padding: 1em 0;
+            font-size: 14px;
+            background-color: #FFFFFF;
+            align-self: flex-end;
+            width: 100%;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+        }
+
+        code {
+            padding: 2px 4px;
+            font-size: 90%;
+            color: #c7254e;
+            background-color: #f9f2f4;
+            border-radius: 4px;
+            font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+        }
+    </style>
+<meta http-equiv="refresh" content="360"></head>
+<body>
+<header>
+<div class="gartner-logo">
+<a href="/en" class>
+<img class="logo img-responsive" width="116" height="27" alt src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz4KPCEtLSBHZW5lcmF0b3I6IEFkb2JlIElsbHVzdHJhdG9yIDI1LjIuMywgU1ZHIEV4cG9ydCBQbHVnLUluIC4gU1ZHIFZlcnNpb246IDYuMDAgQnVpbGQgMCkgIC0tPgo8c3ZnIHZlcnNpb249IjEuMSIgaWQ9IkxheWVyXzEiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgeG1sbnM6eGxpbms9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkveGxpbmsiIHg9IjBweCIgeT0iMHB4IgoJIHZpZXdCb3g9IjAgMCAxMDgwIDYxMiIgc3R5bGU9ImVuYWJsZS1iYWNrZ3JvdW5kOm5ldyAwIDAgMTA4MCA2MTI7IiB4bWw6c3BhY2U9InByZXNlcnZlIj4KPHN0eWxlIHR5cGU9InRleHQvY3NzIj4KCS5zdDB7ZmlsbDojMDAyODU2O30KPC9zdHlsZT4KPHBhdGggY2xhc3M9InN0MCIgZD0iTTEwNjQuNCwyNjMuOGwtMy4xLDM2LjZoLTE1Yy0yMy45LDAtMzYuMywxOS4xLTM2LjMsMzcuNXY4Mi43aC00Mi4yVjI2My44aDQwLjFsMC45LDE5LjYKCWM4LjQtMTMuNCwyMy4xLTE5LjYsNDEuMy0xOS42SDEwNjQuNHoiLz4KPHBhdGggY2xhc3M9InN0MCIgZD0iTTc3MS4xLDQyMC42aC00Mi4zdi04Mi45YzAtMTcuNC0xLjYtMzkuMi0yNS45LTM5LjJjLTIzLjUsMC0zMi45LDE3LTMyLjksMzYuN3Y4NS4zaC00Mi4zVjI2My44SDY2N2wwLjksMjAKCWM4LjQtMTMuNCwyNC4xLTIzLjksNDcuMi0yMy45YzQyLjcsMCw1Ni4xLDMwLjUsNTYuMSw2Mi4xTDc3MS4xLDQyMC42eiIvPgo8cGF0aCBjbGFzcz0ic3QwIiBkPSJNNjA5LjIsMzg0bC0zLDM1LjdjLTkuOCwyLjYtMTkuOSwzLjktMzAuMSwzLjdjLTM5LjksMC01MS41LTE4LjMtNTEuNS01NS4xVjIxOS42SDU2N3Y0NC4yaDQyLjFsLTIuOSwzNi42SDU2NwoJVjM2NWMwLDE0LjgsNCwyMi43LDE5LjIsMjIuN0M1OTQsMzg3LjgsNjAxLjgsMzg2LjUsNjA5LjIsMzg0eiIvPgo8cGF0aCBjbGFzcz0ic3QwIiBkPSJNNTEwLjgsMjYzLjhsLTMuMywzNi42SDQ5NmMtMjMuOCwwLTM1LjcsMTkuMS0zNS43LDM3LjV2ODIuN0g0MThWMjYzLjhoNDBsMC44LDE5LjYKCWM4LjUtMTMuMywyMy4yLTE5LjYsNDEuNC0xOS42SDUxMC44eiIvPgo8cGF0aCBjbGFzcz0ic3QwIiBkPSJNMjI2LjksNDAzLjJjLTI4LjcsMTUuNC01Ny40LDI0LjItOTUuMywyMy4xYy03MC4yLTIuMS0xMjAuOS00NS44LTEyMC45LTExOS40YzAtNzMuMyw1MS4yLTEyMC4yLDEyMS0xMjEuMwoJYzM1LjQtMC41LDY3LDguNCw5MS44LDMwLjNMMTkzLjYsMjQ2Yy0xNS4zLTEzLjEtMzcuOC0yMC43LTY0LjgtMTkuNWMtNDMuOSwyLTcwLjQsMzQtNzEsNzcuOGMtMC42LDQ3LjUsMjguNiw4MC4zLDc0LjIsODEuNQoJYzIxLjUsMC41LDM2LjgtMi4zLDUwLjEtOC4zVjMyOWgtNDcuNGwzLjItMzkuOWg4OC45TDIyNi45LDQwMy4yeiIvPgo8cGF0aCBjbGFzcz0ic3QwIiBkPSJNOTQ4LjksMzU3LjJIODMyLjhjMy4zLDIwLDE5LjEsMzIuMSwzOC43LDMyLjdjMTkuMSwwLjUsMjkuNy01LjIsNDMuNy0xOS40bDI3LjYsMjAuOQoJYy0xOS42LDI0LjItNDMuMiwzMy03MC4xLDMzYy00Ny4yLDAtODIuNS0zMy04Mi41LTgyLjJTODI1LjQsMjYwLDg3MSwyNjBjNTAuMywwLDc3LjgsMzAuNSw3Ny44LDg0LjVMOTQ4LjksMzU3LjJ6IE05MDYuNSwzMjQuMwoJYy0xLjMtMTkuOC0xNi4xLTMyLjMtMzYuNi0zMS41Yy0yMC40LDAuOC0zNC4zLDE0LjItMzcuMSwzMS41SDkwNi41eiIvPgo8cGF0aCBjbGFzcz0ic3QwIiBkPSJNMzkxLjMsMzE3Ljl2MTAyLjdoLTM3LjRsLTAuOS0xNS41Yy0xMS40LDE0LjItMzAsMTkuMy00OS4yLDE5LjNjLTI4LjgsMC01Ni0xNC4yLTU2LjYtNDcuMwoJYy0wLjgtNTIsNTguNi01NS43LDk1LjktNTUuN2g3LjV2LTIuMWMwLTE3LjItMTEuNC0yNi41LTMyLjgtMjYuNWMtMTUuNiwwLjEtMzAuNSw2LTQxLjksMTYuN2wtMjQuNC0yNC44CgljMTkuNi0xNi4zLDQ0LjQtMjUuMSw2OS44LTI0LjdDMzY5LjksMjYwLDM5MS4zLDI4Mi40LDM5MS4zLDMxNy45eiBNMzUwLjYsMzUyLjJoLTUuOWMtMjAsMC01NS4yLDEtNTUuMSwyMgoJYzAuMiwyOS42LDYxLDIwLjEsNjEtMTUuNUwzNTAuNiwzNTIuMnoiLz4KPHBhdGggY2xhc3M9InN0MCIgZD0iTTEwMzEuNCw0MDIuM2MwLjMtOS41LDguMi0xNi45LDE3LjYtMTYuNmM5LjUsMC4zLDE2LjksOC4yLDE2LjYsMTcuNmMtMC4zLDkuMy03LjksMTYuNi0xNy4xLDE2LjYKCWMtOS41LDAtMTcuMS03LjctMTcuMS0xNy4xQzEwMzEuNCw0MDIuNywxMDMxLjQsNDAyLjUsMTAzMS40LDQwMi4zeiBNMTA0OC41LDQyMy41YzExLjYtMC4yLDIxLTkuNywyMC44LTIxLjQKCWMtMC4yLTExLjYtOS43LTIxLTIxLjQtMjAuOGMtMTEuNSwwLjItMjAuOCw5LjUtMjAuOCwyMWMtMC4xLDExLjYsOS4zLDIxLjEsMjAuOSwyMS4yQzEwNDguMiw0MjMuNSwxMDQ4LjQsNDIzLjUsMTA0OC41LDQyMy41CglMMTA0OC41LDQyMy41eiBNMTA0NCw0MDRoNC4zbDYuNCwxMC41aDQuMWwtNi44LTEwLjdjMy42LTAuNCw2LjItMi40LDYuMi02LjdjMC00LjgtMi44LTYuOS04LjYtNi45aC05LjJ2MjQuM2gzLjdMMTA0NCw0MDR6CgkgTTEwNDQsNDAwLjl2LTcuNWg1YzIuNiwwLDUuMywwLjUsNS4zLDMuNmMwLDMuNy0yLjgsNC01LjksNEwxMDQ0LDQwMC45eiIvPgo8L3N2Zz4K">
+</a>
+</div>
+</header>
+<div class="backgroundText">
+<h1>
+Gartner.com
+</h1>
+<div class="description">
+<p class="p-intro" style="color: rgb(6,196,176);">To ensure a secure connection and verify you're human, please complete the validation process, if prompted.
+<br>
+</p>
+</div>
+<div class="main-wrapper" role="main"><div class="main-content"><noscript><div class="h2"><span id="challenge-error-text">Enable JavaScript and cookies to continue</span></div></noscript></div></div><script>(function(){window._cf_chl_opt = {cFPWv: 'g',cH: 'fPbXdwxQ1QsZuNPoMwN0Vf6PVTbMab9Rq9awN9TZGhQ-1789977771-1.2.1.1-gEzewSuhQDLWGM0emyr2dMoY4Fjf8xnK91NdF180iM0.wfj8Up1WD2I0ZLJa7Q4i',cITimeS: '1789977771',cRay: 'a3e78cceba2884e8',cTplB: '0',cTplC:1,cTplO:0,cTplV:5,cType: 'managed',cUPMDTk:"/en/information-technology/glossary/mttr-mean-time-to-repair?__cf_chl_tk=oEjmNKDu1hi_mOrchqu2ZplHKPyPdN55EWqh_a7IATY-1789977771-1.0.1.1-jyisZjcQob9ESxsdP0iSco3aNbWtJ8H5Y.dgBPTzSTk",cvId: '3',cZone: 'www.gartner.com',fa:"/en/information-technology/glossary/mttr-mean-time-to-repair?__cf_chl_f_tk=oEjmNKDu1hi_mOrchqu2ZplHKPyPdN55EWqh_a7IATY-1789977771-1.0.1.1-jyisZjcQob9ESxsdP0iSco3aNbWtJ8H5Y.dgBPTzSTk",md: 'r0Qva.aysGY109SBTwbCM8sfSB8WwReEduDxVFLivo8-1789977771-1.2.1.1-4WuEiA9bPFRqK4dNTbfXtJ9MGnvSrraYhqivOCg4TihZXz6nAgeTqDoxBbn0dXoMN6czYkd5E.djNKl7mmFl3FDvLw6.qsJQANfQ8xYmRNaC8Nhf5f32W7LeQ05330Uwg2_ARr8yDU1ZNp_in4H0AJiflDDRyc10tp5O18qPhIAubAd_FBsaiItyLHo1CPbbKF5H8yKM5IaWn6So1Q0RCruz3QGoMYNKwVW8kyFfFMn7WWnAJgqrUbsQPa3YRWUq7JLQlc4.D2tejvvkAz2dNpvcG5PjLbfwv2Kfpo8N7F1ob3f2iKrovimmvenB0glQa6TkTxIZ.uUah9HjpZYujkS_LIRY7vBr6fCMjKIco.liP6zWg5lW0fNCP42Oq3sekSlHwSBD1t.WWRVcPj37KGtep_lO1soQE0PdmEMBUIas1YqZw1WOKogfThwBRhKqLd1XfzOsJf6kJwYqCTmdOmqYXLOcFadArjC_Is2_0NU_YpAW9WvUPS2j30cvWAg1wPqvvXcJzMF9jSwVLTqzwkfz34IOj9JJB9LWQJS4ZJwm1dVh8mADQdcwXM61RSwUnRVheySV5ARG3Lq2rAp9m9jcVhuFIDH7yNbyP3L3KhskRQDOx5SkHqe1x0AvyJVIKGut3ENtoIs1Bpop0uFvNwVC_8tjgM0z.Xaz7DRFnCFqqeaI.TOkgkiGEqJrRQFni1lL_6uLOnw_4hqvKyIBTEo3dO1LOBcofy0u_wYNINbU.M0oYCMRj3znGkjr58epQFRwIjyyMffVPg4nOavrXSMzpvN_dbJSM_6qvfFQ_AMYYD_gdH5iILVRhLhQsjTVZbFuolXssbUE_W4AmNjGCyudOsIo4m0C1uanFI5kTyFzYUjwgpQ0p47v7OIoqVpQrvQk4sU7ofB6vlQlO4Hih8ZoyEtyiO4_O9Xb_UQnUh_io_TVSrib2583vsY27nlWjyBZSM8WRZu1HO9GRlHulh6HKloaqGwRktoCEpGelS4aKPuUAkYPQYu3JNkrlKt0K9UUTXs8NBwnlSH.wZUtdXqmQKboZ7ZJkTCwYR0A7Sp7ImfADuI9bXCsXSzl5of4oMgMpA.Zw.5l0vKd9yhHOcHl0piYRXDe0bs0sZedZINvamYAhKgtn13pYXnFDiSPHqDpaeizDtZND4gaucTubQvax4nd8JAzsXV4BvPTW0Gto4ZaiJBOHNrPJkk5ni4qltdlo8kwJZIdFUN3.zJbG80qEpetD7_.NTTCWPdELvXwNVSxQ.4GRLDF227q_5Mg',mdrd: 'BHVkOig2Ysw3U2T_eAPghyTVsyGyd8MG8LQA5LFuz9A-1789977771-1.2.1.1-t8GZ8GI4UZIfLp17SWipbk4qRItPUsQoeKhuL8YCoNI_kqTz02Kem3ztpYoqdjfKHbh3C_WZUdxOfVGyrP4LG1qSRt3TboT51jcPPtI2xPKClvxgdl0ZMmyFX55jAVs_qX3skqxerX17YtcgiDMuNAI4WjiQuj0z..FBT9FA.PvjFwivoHf1zCgZCbqnUu3PaxEkAOTRhguo6V3wcCXNXH4ka5i0OHwJ6LxTgIULnmv.8a0PCzF7dcf78tvnXzFqrb9_kbLlpjrygAU2Cw_7yI5WopiQzToQ_zmzysxf7c.lxxJXJW8soe37XYnaEuPU5scV7hCCmvJKj1hPZg0AnMbOgxdlfbOosCvjE5m_hNk',};var a = document.createElement('script');a.src = '/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1?ray=a3e78cceba2884e8';window._cf_chl_opt.cOgUHash = location.hash === '' && location.href.indexOf('#') !== -1 ? '#' : location.hash;window._cf_chl_opt.cOgUQuery = location.search === '' && location.href.slice(0, location.href.length - window._cf_chl_opt.cOgUHash.length).indexOf('?') !== -1 ? '?' : location.search;if (window.history && window.history.replaceState) {var ogU = location.pathname + window._cf_chl_opt.cOgUQuery + window._cf_chl_opt.cOgUHash;history.replaceState(null, null,"/en/information-technology/glossary/mttr-mean-time-to-repair?__cf_chl_rt_tk=oEjmNKDu1hi_mOrchqu2ZplHKPyPdN55EWqh_a7IATY-1789977771-1.0.1.1-jyisZjcQob9ESxsdP0iSco3aNbWtJ8H5Y.dgBPTzSTk"+ window._cf_chl_opt.cOgUHash);a.onload = function() {history.replaceState(null, null, ogU);}}document.getElementsByTagName('head')[0].appendChild(a);}());</script>
+</div>
+<footer>
+<p>
+Ray ID: <code>a3e78cceba2884e8</code>
+</p>
+</footer>
+</body>
+</html>

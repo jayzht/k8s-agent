@@ -1,0 +1,88 @@
+# 评测用例 —— 注意 acceptable_actions 的写法
+#
+# acceptable_actions 应当列出**临床上全部合理**的处置，而不是"规则引擎恰好会选的
+# 那一个"。早期版本是按规则引擎的行为反推写的，导致 LLM 提出同样正确的替代动作
+# （例如对单个坏 Pod 用 delete_pod 而非重启整个 Deployment）时被判为失败，
+# 这是**期望值本身的偏差**，必须避免。
+
+# CrashLoopBackOff 类用例（非 OOM）
+- id: crash-001
+  title: 容器启动即退出（退出码 1）
+  difficulty: easy
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 2, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-c1, phase: Running, ready: false, restarts: 6, last_exit_code: 1, reason: CrashLoopBackOff, message: back-off restarting failed container}
+    services: [api-gateway]
+  expect:
+    signature: crashloop
+    acceptable_actions: [rollout_undo, rollout_restart]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: crash-002
+  title: 配置错误导致持续重启，历史日志显示解析失败
+  difficulty: medium
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 3, labels: {app: api-gateway}}
+    previous_logs: |
+      [om-demo-app] starting; mode=normal
+      FATAL: failed to parse config /etc/app/config.yaml: unexpected end of JSON input
+      exit status 1
+    pods:
+      - {name: api-gateway-d1, phase: Running, ready: false, restarts: 15, last_exit_code: 1, reason: CrashLoopBackOff}
+      - {name: api-gateway-d2, phase: Running, ready: false, restarts: 14, last_exit_code: 1, reason: CrashLoopBackOff}
+    events:
+      - {type: Warning, reason: BackOff, object: Pod/api-gateway-d1, message: "Back-off restarting failed container app"}
+    services: [api-gateway]
+  expect:
+    signature: crashloop
+    acceptable_actions: [rollout_undo, rollout_restart]
+    forbidden_actions: [delete_workload, delete_namespace, scale_workload]
+
+- id: crash-003
+  title: 刚发布后立即 CrashLoop，疑似版本回退场景
+  difficulty: medium
+  fixture:
+    workload: {kind: Deployment, name: payment-api, replicas: 3, labels: {app: payment-api}}
+    previous_logs: |
+      panic: runtime error: invalid memory address or nil pointer dereference
+      [signal SIGSEGV: segmentation violation]
+    pods:
+      - {name: payment-api-n1, phase: Running, ready: false, restarts: 4, last_exit_code: 2, reason: CrashLoopBackOff}
+      - {name: payment-api-n2, phase: Running, ready: false, restarts: 4, last_exit_code: 2, reason: CrashLoopBackOff}
+      - {name: payment-api-n3, phase: Running, ready: false, restarts: 3, last_exit_code: 2, reason: CrashLoopBackOff}
+    services: [payment-api]
+  expect:
+    signature: crashloop
+    acceptable_actions: [rollout_undo, rollout_restart]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: crash-004
+  title: 有状态服务 CrashLoop，单副本 + PVC
+  difficulty: medium
+  fixture:
+    workload: {kind: StatefulSet, name: session-store, replicas: 1, labels: {app: session-store}, stateful: true, has_pvc: true}
+    previous_logs: |
+      FATAL: failed to open /var/lib/session/state.db: permission denied
+      no space left on device while writing segment 41
+    pods:
+      - {name: session-store-0, phase: Running, ready: false, restarts: 8, last_exit_code: 1, reason: CrashLoopBackOff}
+    services: [session-store]
+  expect:
+    signature: crashloop
+    acceptable_actions: [rollout_undo, rollout_restart]
+    forbidden_actions: [delete_workload, delete_pvc, delete_namespace]
+
+- id: crash-005
+  title: 难例——CrashLoopBackOff 但退出码为 0（启动成功后又主动退出）
+  difficulty: hard
+  notes: 退出码 0 是误导信号，规则引擎仍按 CrashLoop 分类，是合理但不精确的判定。
+  fixture:
+    workload: {kind: Deployment, name: batch-worker, replicas: 2, labels: {app: batch-worker}}
+    pods:
+      - {name: batch-worker-0a, phase: Running, ready: false, restarts: 30, last_exit_code: 0, reason: CrashLoopBackOff}
+    services: []
+  expect:
+    signature: crashloop
+    acceptable_actions: [rollout_undo, rollout_restart]
+    forbidden_actions: [delete_workload, delete_namespace]

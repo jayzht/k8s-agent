@@ -1,0 +1,226 @@
+What is MTTR? | PagerDuty
+ Explore our top new Generally Available and Early Access features.
+ View Product Drops
+ ✕ 
+ Products
+ Solutions
+ Pricing
+ Company
+ Resources
+ English
+ Deutsch
+ Français
+ 日本語
+ Contact Us
+ Log In
+ Start for Free
+ Products
+Products
+PagerDuty Operations Cloud
+The platform for mission-critical work in the modern enterprise.
+Incident Management
+End-to-end orchestration for rapid issue resolution.
+AI at PagerDuty
+Revolutionize operations at the speed of AI.
+Automation
+Accelerate critical work across the enterprise.
+AI Agents
+Redefine operations with AI Agents that ignite growth.
+Status Pages
+A single source of truth for system status.
+PagerDuty Advance
+Generative AI for critical operations work.
+Customer Service Ops
+Bridge support and engineering teams.
+AIOps
+Reduce alert noise and accelerate triage.
+Monthly Product Drops
+Learn more about new Generally Available and Early Access features
+ ➔
+ Work how you want with PagerDuty.
+ Explore our 750+ integrations
+ Platform
+Platform
+PagerDuty Operations Cloud
+The platform for mission-critical work in the modern enterprise.
+Developer Platform
+Customize your PagerDuty experience.
+Professional Services
+Get more value from PagerDuty.
+Security
+View our trust and compliance practices.
+Enterprise Class
+Secure, reliable, extensible, and scalable.
+Integrations
+Work how you want with PagerDuty.
+Monthly Product Drops
+Learn more about new Generally Available and Early Access features
+ ➔
+ See how PagerDuty works for you.
+ Request a demo
+Solutions
+Solutions
+ Incident Management TransformationOperations Center ModernizationAutomation StandardizationCustomer Experience OperationsDigital Operations ResiliencyScaled Service OwnershipRemote-Location Operations
+Use Cases
+ Security Incident ManagementLLMOpsDataOpsFinOpsComplianceOpsCrisisOpsSee All Use Cases
+Industries
+ Financial ServicesHealthcareNon ProfitGovernmentEducationRetailAI Infrastructure
+Operational Integrity at FOX
+Learn how strategic technology investments powered FOX's digital and operational transformation.
+ ➔
+ Work how you want with PagerDuty.
+ Explore our 750+ integrations
+ Pricing
+Company
+Who We Are
+ Thought LeadershipAwardsCareersInvestor RelationsLeadershipNewsroom
+About us
+We're empowering teams with the time and efficiency to build the future.
+Our Impact
+See how we are building resilience and accelerating change.
+FY26 Impact Report
+Learn about our efforts around global employee engagement, sustainability, and more.
+ ➔
+Resources
+Resources
+ LibraryBlogDemosWebinarsEventsEbooks
+Customer Stories
+ TUIZoomSpotifyDraftKingsAustralian BankVodafoneFox CorporationSee All Customers
+Learning
+ Template and Prompt LibraryPagerDuty UniversityCommunityOps GuidesKnowledge Base
+PagerDuty on Tour
+Get on-demand insights on AI-first operations.
+ ➔
+ Have a question? We're here to help.
+ Contact Us
+What is MTTR?
+ Table of contents:
+Every business is now a digital business, regardless of the industry it serves. This means companies need to work harder and faster to ensure constant but stable improvements to their operational performance. As a best practice, four key metrics can be used to monitor that performance – as per Google’s DevOps Research and Assessment (DORA) team research project. 
+MTTR is one such metric and a truly relevant one to all incident response teams as it helps understanding how quickly they can respond to unplanned work. You might have seen different interpretations of the acronym MTTR: Mean Time to Repair, Recovery, Respond or Resolve. In this article, we will explore each MTTR interpretation, how to calculate it, the importance of establishing which one to use, and how to improve it.
+What is Mean Time to Repair?
+Mean Time To Repair (MTTR) refers to the average duration it takes to repair a system or device after a failure or malfunction occurs. It measures the efficiency of the repair process.
+How to Calculate Mean Time to Repair
+Formula: Total repair time / Number of incidents.
+For example, if you had three incidents with repair times of 2 hours, 3 hours, and 4 hours, the total repair time would be 9 hours and the MTTR would be 3 hours (9/3=3).
+What is Mean Time to Recovery?
+Mean Time To Recovery (MTTR) refers to the average time it takes to recover from an incident or disruption and restore normal operations. It focuses on the overall recovery process, thus an important measure of a system or service’s reliability and efficiency. 
+How to Calculate Mean Time to Recovery
+Formula: Downtime / Number of incidents. 
+For example, if a system was down for 20 minutes in two separate incidents in a given period, the MTTR would be 10 minutes (20/2=10).
+What is Mean Time to Respond?
+Mean Time To Respond (MTTR) measures the average time it takes to acknowledge and respond to an incident or customer inquiry. It focuses on the initial response and sets the foundation for subsequent actions. 
+While this metric sounds similar to Mean Time to Acknowledge (MTTA), it’s important to note that Mean Time to Respond considers a larger part of the incident response process, essentially from an alert trigger to a response delivery; MTTA only measures the average time it takes to acknowledge an alert after it is triggered. 
+How to Calculate Mean Time to Respond
+Formula: Response time (from alert to resolution) / Number of incidents.
+For example, if you had 2 incidents in a week and spent a total of one hour on them, your weekly MTTR would be 30 minutes (60/2 = 30).
+What is Mean Time to Resolve?
+Mean Time To Resolve (MTTR) is the average time it takes to fully resolve an incident or issue, including all necessary repairs, recoveries, and additional actions required to prevent reoccurrence. 
+How to Calculate Mean Time to Resolve
+Formula: Full resolution time / Number of incidents. 
+For example, systems were down for a total of three hours in a week due to a couple incidents. An additional hour was dedicated to deploying fixes to prevent future outages. The MTTR is two hours (4/2=2).
+Why and How to Establish the Preferred MTTR Interpretation
+Establishing the preferred interpretation of MTTR is essential to provide clarity and consistency in tracking and measuring performance. By clearly defining which aspect of incident management the MTTR metric focuses on, organizations can align processes and goals more efficiently and direct their efforts toward specific areas. This targeted approach enables organizations to streamline operations, reduce downtime, and enhance customer satisfaction.
+How to improve MTTR?
+Whatever the interpretation, the goal is always to minimize the MTTR. But the key steps to improve depend on what the organization’s MTTR is focused on:
+Key Steps to Improve MTTR
+Metric
+Mean Time to 
+Repair
+Mean Time to Recovery
+Mean Time to Respond
+Mean Time to 
+Resolve
+Focus
+Ensuring repair efficiency
+Identifying and streamlining bottlenecks
+Ensuring prompt and efficient response to incidents
+Reducing resolution time and increasing overall productivity
+Tactic
+Reducing diagnosis time
+Streamlining maintenance processes
+Improving incident response procedures
+Enhancing cross-functional communication
+Investing in backup and redundancy solutions
+Establishing escalation policies
+Providing training to support teams
+Adopting automation wherever possible
+Implementing postmortems
+Quantify with Quality
+MTTR is a key metric to building an efficient incident management process. However, in order to effectively leverage the KPI to drive change in the right direction, the business must clearly define and align on their desired interpretation before tracking and measuring accordingly. Be it Mean Time to Repair, Recovery, Response, or Resolution, MTTR can inform on critical decisions leading to targeted improvements and operational and customer experience excellence. When paired with the right tools and processes, these KPIs can help your organization build operational maturity to grow past a manual reactive state towards a more proactive, preventative approach.
+At PagerDuty, MTTR equals Mean Time to Resolve as our mission is to revolutionize operations and build customer trust by getting organizations ready for anything in a world of digital anything. The PagerDuty Operations Cloud™ harnesses the power of AI, automation and orchestration to simplify critical work, reduce costs and accelerate innovation in a single platform. It also includes new and improved analytics that go way beyond MTTR, offering granular insights on your digital operations true impact in your business. Learn how PagerDuty AIOps can help you improve your metrics and try the PagerDuty 14-day free trial to experience the full power of the PagerDuty Operations Cloud™.
+ Watch demo 
+ Contact Us 
+Additional Resources
+ ebook
+From Firefighting to Autonomous Operations: How AI Startups Scale to Enterprise Reliability
+ infographics
+The Cost of Disruption vs. the Value of AI-Powered Operations
+Recent Blog Posts
+ Investigate Smarter from Any Agent: Blast Radius and AI Post-Incident Reviews Come to the PagerDuty MCP Server
+ The AI Economy Has a Senior Engineer Problem. Here’s How to Solve It
+ See It, Approve It, Revoke It: Scoped OAuth for Public Apps
+Platform
+ Incident Management
+ AIOps
+ Automation
+ Business Operations
+ Developer Platform
+ Enterprise-Class Platform
+ Digital Operations Management
+ Generative AI
+ What's New
+Solutions
+ Incident Management Transformation
+ Operations Center Modernization
+ Automation Standardization
+ Customer Experience Operations
+ Digital Operations Resiliency
+ Scaled Service Ownership
+ Remote-Location Operations
+Resources
+ Resources Library
+ Community Forum
+ PagerDuty On Tour
+ Customer Stories
+ Integration Guides
+ Automation Library
+ Blog
+ Watch Demo
+ Request a Demo
+ Use Cases
+ Events
+Company
+ About PagerDuty
+ Thought Leadership
+ Newsroom
+ Events
+ PagerDuty.org
+ Investor Relations
+ Leadership
+ Suppliers
+ Careers
+ Awards
+Support
+ System Status
+ Help & Support
+ Partner with PagerDuty
+ Contact Us
+ Legal
+ Services
+ FAQs
+ Accessibility
+ Ops Guides
+ PagerDuty University
+ Knowledge Base
+ Change language
+ English
+ Française
+ Deutsche
+ 日本語
+ © 2026 PagerDuty, Inc. All rights reserved.
+ Privacy policy
+ Website Terms of Use
+ California Privacy Notice
+ Modern Slavery Act
+ CCPA
+ Cookie Settings

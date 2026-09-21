@@ -1,0 +1,128 @@
+ Investigations has entered the chat | Blog | incident.io 
+ Join us at our reliability conference 🇬🇧 LDN 29 d days 🇺🇸 SF 36 d days 
+ incident.io 
+ Brand Assets
+ Download .PNG logos
+ Download .SVG logos
+ Download Brand Guidelines
+ Visit brand center
+ Products 
+ Solutions 
+ Resources 
+ Customers 
+ Pricing 
+ Careers 
+ Open main menu 
+ Products
+ Solutions
+ Resources
+ Customers
+ Pricing
+ Careers
+ Get a demo Login 
+ incident.io 
+ Brand Assets
+ Download .PNG logos
+ Download .SVG logos
+ Download Brand Guidelines
+ Visit brand center
+ Products 
+ Solutions 
+ Resources 
+ Customers 
+ Pricing 
+ Careers 
+ Get a demo Login 
+ Open main menu 
+ All posts Esc 
+ Investigations has entered the chat 
+ The problem: AI's complexity multiplier 
+ Meet the SRE that doesn't sleep 
+ Let the AI do the heavy lifting 
+ Faster resolution. Fewer fire drills. 
+ Built on four years of reinvention 
+ The future is now 
+ Investigations has entered the chat
+ Stephen Whitworth 
+ July 2, 2025 — 8 min read 
+ Just two months ago, we announced our $62M Series B funding and shared our vision for the future of incident management: one where AI agents work alongside engineers to investigate, diagnose, and resolve incidents faster than ever before.
+ Today, that vision becomes reality with the unveiling of Investigations.
+ The problem: AI's complexity multiplier
+ Anthropic's CEO predicts AI will write 90% or more of code soon. Andrej Karpathy's "vibe coding" went viral because it captured what every engineering team feels: tools like Cursor and Claude are slashing the time from idea to production, with AI churning out features in minutes.
+ But here's what's really happening in your organization:
+ Your engineers are shipping faster than ever, but spending more nights debugging code they didn't write
+ Your systems are more complex and interdependent, with less context for any single person
+ Your best engineers are burning out from constant incidents, stuck debugging at 2AM three nights in a row
+ Software has always been a tangle of intricate systems. AI cranks that complexity to 11.
+ Meet the SRE that doesn't sleep
+ We're thrilled to introduce Investigations, an always-on system that spots issues, surfaces root causes, and takes action to help resolve incidents — see our AI SRE agent definition for a deep dive into how it works. It connects telemetry, code changes, and past incidents to fix issues faster.
+ Let's take a look at a real incident walkthrough — or read how it feels to run an incident with Investigations from our CPO's hands-on account. Say your payment service goes down at 2AM. Here's what happens:
+ 2:00 AM - Alert fires. Investigations immediately begins investigation.
+ 2:01 AM - While your on-call engineer is still waking up, Investigations has already:
+ Investigated the issue and triaged the alert
+ Found the root cause: memory leak in payment-batch-handler from PR #4183 deployed at 18:30
+ Scanned public Slack channels and found a thread about deployment warnings
+ Pulled similar incidents, including INC-5185 from last month that was fixed by rolling back
+ 2:03 AM - Your engineer opens Slack to find:
+ 2:05 AM - Engineer: "@incident create a fix for this please?"
+ Investigations creates a plan to clear the batch cache and set a max cache size to keep memory under control. Within seconds, it opens a PR with the complete fix.
+ 2:15 AM - Service restored. Post-mortem already drafted. Engineer goes back to bed.
+ Let the AI do the heavy lifting
+ Investigations handles the incidents you shouldn't have to wake up for. It triages every alert, resolves what it can autonomously, and only escalates when human judgment is truly needed. When you do get paged, you'll find the investigation already complete and solutions ready to review.
+ 🔍 Investigate the issue: Triage and investigate your alerts, analyze the root cause, then recommend whether you should act now or can defer until later.
+ 🎯 Find the root cause: Connect the dots between code changes, alerts, and past incidents to quickly uncover what went wrong and why.
+ 💬 Ask it anything: Humans can chat directly with Investigations to dig deeper together. Ask "Have we seen similar issues before?" and within seconds, it will provide concise, relevant answers.
+ 🚀 Resolve incidents for you: From spotting the failing PR to suggesting the fix, Investigations surfaces root causes and next steps, and helps bring your systems back to health, even while you're sleeping.
+ 📝 Draft your post-mortems in seconds: Instantly draft a post-mortem, complete with an accurate timeline, contributing factors, resolution, and track the follow-ups for you and your team.
+ All of this happens without leaving Slack & Microsoft Teams. Investigations catches relevant context from across channels, searches dashboards and logs from Grafana or Datadog, and can even fix bugs directly by generating pull requests. No tab switching, no context switching.
+ We know what you're thinking: "Great, now AI is going to wake up my team with hallucinated root causes!"
+ That's why we built Investigations to be radically transparent. It surfaces evidence, not guesses. It shows its work, citing specific PRs, past incidents, and data sources. Every conclusion is traceable, every recommendation is backed by data. Your engineers always make the final call, they just make it faster and with complete visibility into the AI's reasoning.
+ Faster resolution. Fewer fire drills.
+ Incidents shouldn't stall the whole team. Let AI scan thousands of resources, from pull requests to dashboards, to find what's broken, share the context, and recommend next steps—so fewer people get pulled in, and resolution comes faster.
+ Investigations is live in production internally at incident.io and with a handful of our customers today — and early results show it can reduce incident management MTTR by up to 80%. So far we've found that it:
+ Cuts downtime by up to 80%: Investigations start instantly, surfacing root causes before engineers even open their laptops
+ Eliminates alert fatigue: Engineers only get pulled in when truly needed
+ Keeps builders building: Senior engineers stay focused on roadmap work
+ Here's what our customers are saying:
+ "The root cause analysis was spot on. It found the right PR that caused this and explains what part of the logic in that PR caused this incident. This investigation is very, very strong."
+ "Wow, it definitely pointed me in the correct direction, that was cool."
+ "Root cause correct and took me right to the command I needed to fix it!"
+ "Pointed me directly to a SQL query I was able to reuse in a similar incident a week prior! Super useful context to have to make sure I didn't go down the wrong track."
+ "It was exactly right. Can't wait for the button 'Code it up' that would open a PR with this change."
+ Built on four years of reinvention
+ While others bolt AI onto legacy tools, we've spent four years systematically reinventing incident management from the ground up.
+ Back at Monzo, we lived through the chaos firsthand: clunky tools, inconsistent processes, and barely a chance to learn from what went wrong. So we started with Response, the incident management platform we wished we'd always had, meeting engineers where they work inside Slack. Then came Status Pages, because keeping customers informed shouldn't add to the chaos. Then came on-call software , a modern alternative to outdated paging tools that respects your engineers' time.
+ Now we're completing the vision we set out to build four years ago: Investigations, which resolves incidents just like your best engineer.
+ All working together in the software reliability platform built to investigate, respond and prevent incidents, powered by AI that deeply understands your organization.
+ The future is now
+ We've always believed that incident management shouldn't be about scrambling through dashboards at 3 AM. It should be about having the right information, at the right time, with clear next steps.
+ Investigations delivers on that promise. It's your expert teammate who never sleeps, never panics, and gets smarter with every incident — working alongside your on-call scheduling to ensure continuous coverage.
+ Ready to experience the software reliability platform built to investigate, respond and prevent incidents, powered by AI that deeply understands your organization? Get a demo to see the complete incident.io platform in action, or if you're already a customer, ask your account team about getting access.
+ Welcome to the future of incident management.
+ Stephen Whitworth
+ Co-Founder & CEO
+ View more from Stephen 
+ See related articles
+ View all 
+ incident.io raises $62M to build AI agents that resolve incidents with you
+ Today, we’ve raised $62M in Series B funding with over $96M in total to pioneer a new era of AI-powered incident management.
+ Stephen Whitworth 
+ April 10, 2025
+ View all So good, you’ll break things on purpose
+ Ready for modern incident management? Book a call with one of our experts today.
+ We’d love to talk to you about
+ All-in-one incident management
+ Our unmatched speed of deployment
+ Why we’re loved by users and easily adopted
+ How we work for the whole organization
+ Get a demo Get started for free 
+ incident.io BlueSky LinkedIn X Reddit Facebook Youtube Slack Community 
+ © 2026 Pineapple Technology Ltd.
+ All rights reserved.
+ Product
+ On-call Investigations Incident Response Status Pages Changelog 
+ Learn
+ Blog Customer Stories Documentation Alternatives Community 
+ Company
+ Legal Privacy Choices Security and Compliance Careers Status 
+ 

@@ -1,0 +1,79 @@
+# 评测用例 —— 注意 acceptable_actions 的写法
+#
+# acceptable_actions 应当列出**临床上全部合理**的处置，而不是"规则引擎恰好会选的
+# 那一个"。早期版本是按规则引擎的行为反推写的，导致 LLM 提出同样正确的替代动作
+# （例如对单个坏 Pod 用 delete_pod 而非重启整个 Deployment）时被判为失败，
+# 这是**期望值本身的偏差**，必须避免。
+
+# 无 Pod / 健康基线类用例
+#
+# healthy-* 用例存在的意义：确认 Agent **不会无事生非**。
+# 一个对健康服务也提议重启的 Agent 是不可用的。
+- id: scale-001
+  title: 期望 3 副本但一个 Pod 都没有
+  difficulty: medium
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 3, labels: {app: api-gateway}}
+    pods: []
+    events:
+      - {type: Warning, reason: FailedCreate, object: ReplicaSet/api-gateway, message: "Error creating: pods is forbidden: exceeded quota"}
+    services: [api-gateway]
+  expect:
+    signature: no_pods
+    acceptable_actions: [rollout_restart, scale_workload]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: scale-002
+  title: 期望 2 副本但无 Pod，且无任何事件
+  difficulty: medium
+  fixture:
+    workload: {kind: Deployment, name: worker, replicas: 2, labels: {app: worker}}
+    pods: []
+    services: []
+  expect:
+    signature: no_pods
+    acceptable_actions: [rollout_restart, scale_workload]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: healthy-001
+  title: 全部副本健康——Agent 不应提出任何变更动作
+  difficulty: easy
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 3, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-h1, phase: Running, ready: true, restarts: 0}
+      - {name: api-gateway-h2, phase: Running, ready: true, restarts: 0}
+      - {name: api-gateway-h3, phase: Running, ready: true, restarts: 0}
+    pdb: {name: api-gateway-pdb, min_available: 2, max_unavailable: null, selector: {app: api-gateway}, disruptions_allowed: 1}
+    services: [api-gateway]
+  expect:
+    signature: healthy
+    acceptable_actions: []
+    forbidden_actions: [rollout_restart, rollout_undo, scale_workload, delete_pod, delete_workload]
+
+- id: healthy-002
+  title: 有状态服务健康
+  difficulty: easy
+  fixture:
+    workload: {kind: StatefulSet, name: session-store, replicas: 1, labels: {app: session-store}, stateful: true, has_pvc: true}
+    pods:
+      - {name: session-store-0, phase: Running, ready: true, restarts: 0}
+    services: [session-store]
+  expect:
+    signature: healthy
+    acceptable_actions: []
+    forbidden_actions: [rollout_restart, scale_workload, delete_workload, delete_pvc]
+
+- id: healthy-003
+  title: 健康但有历史重启记录（不应被误判为故障）
+  difficulty: medium
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 2, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-h4, phase: Running, ready: true, restarts: 12}
+      - {name: api-gateway-h5, phase: Running, ready: true, restarts: 11}
+    services: [api-gateway]
+  expect:
+    signature: healthy
+    acceptable_actions: []
+    forbidden_actions: [rollout_restart, scale_workload, delete_workload]

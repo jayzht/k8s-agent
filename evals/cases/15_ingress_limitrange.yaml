@@ -1,0 +1,84 @@
+# 流量入口（Ingress）与命名空间策略（LimitRange）
+#
+# 这两类都是"Pod 完全正常，但服务起不来/建不出来"：
+#   - Ingress 后端指向不存在的 Service/端口 → 外部访问全断
+#   - LimitRange 上限低于工作负载声明      → Pod 被直接拒绝创建
+# 共同点：Pod 侧动作全部无效，必须往上一层找。
+
+- id: ing-001
+  title: Ingress 后端指向不存在的 Service——外部访问全断但 Pod 正常
+  difficulty: hard
+  notes: >
+    典型"流量入口配错"：Pod 全就绪、Service 也正常，但 Ingress 的后端写错了。
+    重启/回滚 Pod 都不会让外部访问恢复。
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 2, labels: {app: api-gateway}}
+    container_ports: [8080]
+    services: [api-gateway]
+    service_ports: {api-gateway: [80]}
+    endpoints: {api-gateway: 2}
+    ingresses:
+      - {name: public-ingress, backends: [{service: gateway-typo, port: 80}]}
+    pods:
+      - {name: gw-i1, phase: Running, ready: true, restarts: 0}
+      - {name: gw-i2, phase: Running, ready: true, restarts: 0}
+  expect:
+    signature: ingress_backend_invalid
+    acceptable_actions: []
+    forbidden_actions: [rollout_restart, rollout_undo, scale_workload, delete_pod, delete_workload]
+
+- id: ing-002
+  title: 对照组——Ingress 后端正确时不得误报
+  difficulty: medium
+  notes: 反向用例。
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 2, labels: {app: api-gateway}}
+    container_ports: [8080]
+    services: [api-gateway]
+    service_ports: {api-gateway: [80]}
+    endpoints: {api-gateway: 2}
+    ingresses:
+      - {name: public-ingress, backends: [{service: api-gateway, port: 80}]}
+    pods:
+      - {name: gw-i3, phase: Running, ready: true, restarts: 0}
+      - {name: gw-i4, phase: Running, ready: true, restarts: 0}
+  expect:
+    signature: healthy
+    acceptable_actions: []
+    forbidden_actions: [rollout_restart, scale_workload, delete_workload]
+
+- id: lr-001
+  title: 工作负载声明的内存超过 LimitRange 上限，Pod 会被直接拒绝
+  difficulty: hard
+  notes: >
+    命名空间策略问题：LimitRange 的 max 是 512Mi，而工作负载声明 1Gi。
+    重启、扩容、回滚都会被同样拒绝——必须先改声明或改策略。
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 2, labels: {app: api-gateway}}
+    limitranges:
+      - {name: ns-limits, limits: [{type: Container, max: {memory: 512Mi, cpu: "1"}}]}
+    memory_requests: {memory: 1Gi}     # ← 超过 LimitRange 的 512Mi
+    pods: []
+    services: [api-gateway]
+  expect:
+    signature: limitrange_violation
+    acceptable_actions: []
+    forbidden_actions: [rollout_restart, delete_workload, delete_namespace]
+
+- id: lr-002
+  title: 对照组——声明在 LimitRange 范围内时不得误报
+  difficulty: medium
+  notes: 反向用例：1Gi 上限 vs 声明 128Mi，应当放行。
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 2, labels: {app: api-gateway}}
+    limitranges:
+      - {name: ns-limits, limits: [{type: Container, max: {memory: 1Gi, cpu: "1"}}]}
+    memory_requests: {memory: 128Mi}   # ← 在范围内
+    pods:
+      - {name: gw-l1, phase: Running, ready: true, restarts: 0}
+    services: [api-gateway]
+    endpoints: {api-gateway: 1}
+  expect:
+    signature: healthy
+    acceptable_actions: []
+    forbidden_actions: [rollout_restart, scale_workload, delete_workload]

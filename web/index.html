@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>O&amp;M Agent — 运维审批台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◆</span>
+    <span>O&amp;M Agent</span>
+    <span class="tag">L1 · 只读诊断 + 人工审批执行</span>
+  </div>
+  <div class="chips">
+    <span class="chip" id="chip-cluster">集群 …</span>
+    <span class="chip" id="chip-llm">LLM …</span>
+    <span class="chip" id="chip-operator"></span>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- ── 左：工作负载 ─────────────────────────────────── -->
+  <aside class="panel col-left">
+    <h2>用一句话描述问题</h2>
+    <textarea id="ask-text" rows="2" placeholder="例如：api-gateway 一直重启，帮我看看"></textarea>
+    <button class="btn btn-primary" onclick="App.ask()">理解并诊断</button>
+    <p class="hint">Agent 会先把这句话解析成结构化查询，再走标准诊断链路。
+      解析不出目标时它会直说，而不是猜一个。</p>
+
+    <h2 style="margin-top:18px">或直接选择工作负载</h2>
+    <div class="row">
+      <label>命名空间</label>
+      <input id="ns" value="demo">
+    </div>
+    <div class="row">
+      <label>规划器</label>
+      <select id="planner">
+        <option value="rule">规则引擎（默认）</option>
+        <option value="llm">LLM（DeepSeek）</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>取证轮次</label>
+      <select id="turns">
+        <option value="1">1（单轮）</option>
+        <option value="3" selected>3（先查后断）</option>
+      </select>
+    </div>
+    <button class="btn btn-ghost" onclick="App.loadWorkloads()">刷新列表</button>
+    <ul class="wl-list" id="wl-list"></ul>
+
+    <div id="demo-box" class="hidden">
+      <h2 style="margin-top:20px">① 注入一个故障</h2>
+      <p class="hint">模拟"某个开发推了一次坏变更"。注入后点工作负载诊断。</p>
+      <button class="btn btn-danger" onclick="App.inject('oom')">内存超限 OOMKilled</button>
+      <button class="btn btn-danger" onclick="App.inject('crash')">启动失败 CrashLoop</button>
+      <button class="btn btn-danger" onclick="App.inject('image')">镜像拉取失败</button>
+      <button class="btn btn-danger" onclick="App.inject('pending')">调度失败 Pending</button>
+      <button class="btn" onclick="App.inject('reset')">恢复基线</button>
+    </div>
+
+    <h2 style="margin-top:20px">③ 试试越界请求</h2>
+    <p class="hint">看 Agent 如何拒绝危险动作——即使你强行批准也执行不了。</p>
+    <button class="btn btn-danger" onclick="App.demoRefuse('delete_namespace')">删除 production 命名空间</button>
+    <button class="btn btn-danger" onclick="App.demoRefuse('delete_pvc')">删除数据卷 PVC</button>
+    <button class="btn btn-danger" onclick="App.demoRefuse('secret_access')">读取 Secret</button>
+  </aside>
+
+  <!-- ── 中：诊断 + 确认卡片 ──────────────────────────── -->
+  <main class="panel col-main">
+    <div id="idle" class="empty">
+      <h2>选择一个工作负载开始诊断</h2>
+      <p class="hint">Agent 会读取 Pod 状态、事件、日志与 PDB，给出带证据的结论与候选处置动作。</p>
+      <p class="hint">任何<b>写操作</b>都必须经过人工确认，且无法被此界面绕过。</p>
+    </div>
+
+    <section id="diagnosis" class="hidden">
+      <div class="card card-diag">
+        <div class="card-head">
+          <span class="badge" id="diag-sig"></span>
+          <span class="conf" id="diag-conf"></span>
+          <span class="dim" id="diag-planner"></span>
+        </div>
+        <p class="conclusion" id="diag-conclusion"></p>
+        <div id="diag-hint" class="hintbox hidden"></div>
+        <div id="diag-findings"></div>
+      </div>
+
+      <details class="card" id="inv-box" open=false>
+        <summary>取证过程 <span class="dim" id="inv-count"></span></summary>
+        <div id="inv-body"></div>
+      </details>
+
+      <div class="card">
+        <h3>证据链</h3>
+        <table class="tbl" id="ev-table">
+          <thead><tr><th>#</th><th>类型</th><th>对象</th><th>内容</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>候选处置动作</h3>
+        <div id="cand-list"></div>
+      </div>
+    </section>
+
+    <section id="proposal-box" class="hidden"></section>
+  </main>
+
+  <!-- ── 右：审计与知识 ───────────────────────────────── -->
+  <aside class="panel col-right">
+    <div class="tabs">
+      <button class="tab active" data-tab="audit">审计留痕</button>
+      <button class="tab" data-tab="knowledge">知识沉淀</button>
+      <button class="tab" data-tab="policy">生效策略</button>
+      <button class="tab" data-tab="help">使用说明</button>
+    </div>
+
+    <div id="tab-audit" class="tabpane">
+      <p class="hint">哈希链式追加日志，任何篡改都可被检出。</p>
+      <ul class="audit-list" id="audit-list"></ul>
+    </div>
+
+    <div id="tab-knowledge" class="tabpane hidden">
+      <p class="hint">每次处置沉淀为「症状→根因→处置→结果」，越用越快。</p>
+      <div id="kb-stats"></div>
+      <ul class="audit-list" id="kb-list"></ul>
+    </div>
+
+    <div id="tab-policy" class="tabpane hidden">
+      <div id="policy-body"></div>
+    </div>
+
+    <div id="tab-help" class="tabpane hidden">
+      <div class="card">
+        <h3>两步上手</h3>
+        <ol class="hint" style="padding-left:18px;line-height:1.9">
+          <li>左栏点一个「注入故障」按钮<br><span class="dim">（模拟一次坏发布）</span></li>
+          <li>点工作负载名 → 看诊断 → 点「生成确认卡片」→ 点「确认执行」</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>你在看什么</h3>
+        <div class="kb-row"><span class="dim">中间</span><span>诊断证据链 + 候选动作 + 确认卡片</span></div>
+        <div class="kb-row"><span class="dim">右栏·审计</span><span>哈希链日志（可检出篡改）</span></div>
+        <div class="kb-row"><span class="dim">右栏·知识</span><span>历次处置沉淀，越用越快</span></div>
+        <div class="kb-row"><span class="dim">右栏·策略</span><span>当前生效的 Tier 白名单与熔断规则</span></div>
+      </div>
+      <div class="card">
+        <h3>三个值得看的点</h3>
+        <p class="hint">① <b>确认卡片</b>：影响面、dry-run、回滚路径、熔断检查一屏说清——这是产品主体。</p>
+        <p class="hint">② <b>受保护负载</b>：点 billing-core（黄色左边框）诊断，方案会被「保护标签」熔断拦下。</p>
+        <p class="hint">③ <b>越界被拒</b>：左栏第 ③ 组按钮，看 Agent 拒绝并给替代方案。</p>
+      </div>
+      <div class="card">
+        <h3>入口也能用命令行</h3>
+        <pre>omagent ask "api-gateway 一直重启"</pre>
+        <pre>omagent diagnose demo/api-gateway</pre>
+        <pre>omagent eval        # 跑 68 条评测用例</pre>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <h3 id="modal-title">确认执行</h3>
+    <p id="modal-msg" class="hint"></p>
+    <input id="modal-reason" placeholder="变更理由（会写入审计日志）">
+    <div class="modal-actions">
+      <button class="btn btn-ok" id="modal-ok">确认执行</button>
+      <button class="btn" id="modal-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

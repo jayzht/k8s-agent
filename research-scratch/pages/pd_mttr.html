@@ -1,0 +1,2391 @@
+
+
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+    <head itemscope><meta itemprop="user-account" content="false"><meta itemprop="gdpr" content="false">
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1" name="viewport">
+
+    <link href="https://www.pagerduty.com/resources/devops/learn/what-is-mttr/" hreflang="en" rel="alternate">
+    <link href="https://www.pagerduty.com/fr/resources/devops/learn/what-is-mttr/" hreflang="fr" rel="alternate">
+    <link href="https://www.pagerduty.com/de/resources/devops/learn/what-is-mttr/" hreflang="de" rel="alternate">
+    <link href="https://www.pagerduty.com/resources/devops/learn/what-is-mttr/" hreflang="x-default" rel="alternate">
+
+    <link rel="preconnect" href="https://cdn.cookielaw.org">
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/PlainThin-Regular.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/PlainRegular-Regular.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/PlainBold-Regular.woff2">
+
+    <title>What is MTTR? | PagerDuty</title>
+    <meta content="Learn about MTTR (Mean Time To Repair, Recover, Respond, Resolve) and why it&#039;s crucial for businesses to establish their preferred interpretation." name="description">
+        <meta class="swiftype" name="type" data-type="enum" content="marketing_site" />
+    
+                            <link rel="icon" href="/wp-content/themes/citizens-band/favicon/prod/favicon.ico">              <link rel="icon" href="/wp-content/themes/citizens-band/favicon/prod/icon.svg" type="image/svg+xml">
+            <link rel="apple-touch-icon" href="/wp-content/themes/citizens-band/favicon/prod/apple-touch-icon.png">      <link rel="manifest" href="/wp-content/themes/citizens-band/favicon/prod/manifest.webmanifest">
+    
+                    <link rel="stylesheet" href="/wp-content/themes/citizens-band/css/app4.css?ver=9c1f5da06fada45670b3ab5b6188b195ec7e6203">
+      
+      <script>
+        window.pd = window.pd || {};
+        window.pd.appVersion = "9c1f5da06fada45670b3ab5b6188b195ec7e6203";
+        /**
+          Ensure the analytics object exists by initializing it before any
+          page/track/identify calls are made. Split and segment require it. The
+          object is also set in all-pages.js, but it is loaded with `defer`, so
+          it doesn't get executed until the dom is loaded, which leads to
+          tracking events that are fired before being lost.
+        */
+        "use strict";(()=>{var c=window;var f={production:"production",pdstaging:"pdstaging",staging:"staging",sandbox:"sandbox",localhost:"localhost"},d=Object.freeze({envs:f,googleAnalyticsId:"UA-8759953-1",segmentWriteKey:{production:"FB4ey20k0M2TtO3QinG2R4QkPI4lEfHU",pdstaging:"kVZtwA72zHIDU8EW3z7UXGatLpV2j1tY",development:"kVZtwA72zHIDU8EW3z7UXGatLpV2j1tY"}});var l=window.location.hostname,u=m(l);function m(e){let t={get environment(){return/pagerduty\.com/.test(e)||/pagerduty\.co\.jp/.test(e)?"production":/pd-staging/.test(e)?"pdstaging":"development"},googleAnalyticsId:d.googleAnalyticsId,get segmentWriteKey(){return d.segmentWriteKey[t.environment]}};return t}function p(e){return function({payload:n,next:o}){let r=e?.pd?.cfData?.rayId||null;return r&&(["page","track"].includes(n.obj.type)&&(n.obj.properties={...n.obj.properties||{},cf_ray_id:r}),n.obj.context={...n.obj.context||{},cf_ray_id:r}),o(n)}}function g(){let e="analytics",t=c[e]=c[e]||[];if(!t.initialize){if(t.invoked){c.console&&console.error&&console.error("Segment snippet included twice.");return}t.invoked=!0,t.methods=["trackSubmit","trackClick","trackLink","trackForm","pageview","identify","reset","group","track","ready","alias","debug","page","screen","once","off","on","addSourceMiddleware","addIntegrationMiddleware","setAnonymousId","addDestinationMiddleware","register"],t.factory=function(r){return function(){if(c[e].initialized)return c[e][r].apply(c[e],arguments);var a=Array.prototype.slice.call(arguments);if(["track","screen","alias","group","page","identify"].indexOf(r)>-1){var i=document.querySelector("link[rel='canonical']");a.push({__t:"bpc",c:i&&i.getAttribute("href")||void 0,p:location.pathname,u:location.href,s:location.search,t:document.title,r:document.referrer})}return a.unshift(r),t.push(a),t}};for(var n=0;n<t.methods.length;n++){var o=t.methods[n];t[o]=t.factory(o)}t.load=function(r,a){var i=document.createElement("script");i.type="text/javascript",i.async=!0,i.setAttribute("data-global-segment-analytics-key",e),i.src="https://cdn.segment.com/analytics.js/v1/"+r+"/analytics.min.js";var s=document.getElementsByTagName("script")[0];s&&s.parentNode&&s.parentNode.insertBefore(i,s),t._loadOptions=a},t._writeKey=u.segmentWriteKey,t.SNIPPET_VERSION="5.2.0",t.addSourceMiddleware(p(c)),t.addSourceMiddleware(y),t.addSourceMiddleware(b),t.addSourceMiddleware(w),t.addSourceMiddleware(j),t.page()}}function y({payload:e,next:t}){let n=["track","page","identify"],o=e.obj.type;if(n.includes(o)){let r=document.querySelector("link[rel='canonical']")?.getAttribute("href")||"";e.obj.context?.page&&(e.obj.context.page.canonical=r)}t(e)}function b({payload:e,next:t}){if(e&&e.obj&&e.obj.context&&e.obj.context.page){let n=e.obj.context.page;n.canonical&&(n.url===n.canonical||n.path===n.canonical)&&(n.url=window.location.href,n.path=window.location.pathname)}t(e)}function w({payload:e,next:t}){return["page","track"].includes(e.obj.type)&&e.obj.properties&&(e.obj.properties={...e.obj.properties,platform:"wordpress"}),t(e)}function j({payload:e,next:t}){if(e.obj.type!=="page")return t(e);let o=document.querySelector("meta[name='content_type']")?.getAttribute("content");return o&&e.obj.properties&&(e.obj.properties={...e.obj.properties,content_type:o}),t(e)}g();})();
+//# sourceMappingURL=initialize-segment.min.js.map
+
+      </script>
+      <script async
+                src="https://ob.thisgreencolumn.com/i/313a1c6c53fc549b6cf9213d79f8ac28.js"
+                data-ch="cheq4ppc" class="ct_clicktrue_44071">
+        </script>
+      <!-- VWO snippet for inclusion into twig templates -->
+<!-- From https://app.vwo.com/#/deployments/connected/website/1/code -->
+
+<!-- Start VWO Async SmartCode -->
+<link rel="preconnect" href="https://dev.visualwebsiteoptimizer.com" />
+<script type='text/javascript' id='vwoCode'>
+  window._vwo_code || (function () {
+    var w = window,
+      d = document;
+    var account_id = 753563,
+      version = 2.2,
+      settings_tolerance = 2000,
+      hide_element = 'body',
+      hide_element_style = 'opacity:0 !important;filter:alpha(opacity=0) !important;background:none !important',
+      f = 0;
+    /* DO NOT EDIT BELOW THIS LINE */
+    if (f = !1, v = d.querySelector('#vwoCode'), cc =
+      {}, -1 < d.URL.indexOf('__vwo_disable__') || w._vwo_code)
+      return;
+
+    try {
+      var e = JSON.parse(localStorage.getItem('_vwo_' + account_id + '_config'));
+      cc = e && 'object' == typeof e ? e : {}
+    } catch (e) { }
+    function r(t) {
+      try {
+        return decodeURIComponent(t)
+      } catch (e) {
+        return t
+      }
+    }
+    var s = function () {
+      var e = {
+        combination: [],
+        combinationChoose: [],
+        split: [],
+        exclude: [],
+        uuid: null,
+        consent: null,
+        optOut: null
+      },
+        t = d.cookie || '';
+      if (!t)
+        return e;
+
+      for (var n, i, o = /(?:^|;\s*)(?:(_vis_opt_exp_(\d+)_combi=([^;]*))|(_vis_opt_exp_(\d+)_combi_choose=([^;]*))|(_vis_opt_exp_(\d+)_split=([^:;]*))|(_vis_opt_exp_(\d+)_exclude=[^;]*)|(_vis_opt_out=([^;]*))|(_vwo_global_opt_out=[^;]*)|(_vwo_uuid=([^;]*))|(_vwo_consent=([^;]*)))/g; null !== (n = o.exec(t));)
+        try {
+          n[1] ? e.combination.push({
+            id: n[2],
+            value: r(n[3])
+          }) : n[4] ? e.combinationChoose.push({
+            id: n[5],
+            value: r(n[6])
+          }) : n[7] ? e.split.push({
+            id: n[8],
+            value: r(n[9])
+          }) : n[10] ? e.exclude.push({ id: n[11] }) : n[12] ? e.optOut = r(n[13]) : n[14] ? e.optOut = !0 : n[15] ? e.uuid = r(n[16]) : n[17] && (i = r(n[18]), e.consent = i && 3 <= i.length ? i.substring(0, 3) : null)
+        }
+        catch (e) { }
+      return e
+    }();
+    function i() {
+      var e = function () {
+        if (w.VWO && Array.isArray(w.VWO))
+          for (var e = 0; e < w.VWO.length; e++) {
+            var t = w.VWO[e];
+            if (Array.isArray(t) && ('setVisitorId' === t[0] || 'setSessionId' === t[0]))
+              return !0
+
+          }
+
+        return !1
+      }(),
+        t = 'a=' + account_id + '&u=' + encodeURIComponent(w._vis_opt_url || d.URL) + '&vn=' + version + '&ph=1' + (
+          'undefined' != typeof platform ? '&p=' + platform : ''
+        ) + '&st=' + w.performance.now();
+      e || ((n = function () {
+        var e,
+          t = [],
+          n = {},
+          i = w.VWO && w.VWO.appliedCampaigns || {};
+        for (e in i) {
+          var o = i[e] && i[e].v;
+          o && (t.push(e + '-' + o + '-1'), n[e] = !0)
+        }
+        if (s && s.combination)
+          for (var r = 0; r < s.combination.length; r++) {
+            var a = s.combination[r];
+            n[a.id] || t.push(a.id + '-' + a.value)
+          }
+
+        return t.join('|')
+      }()) && (t += '&c=' + n), (n = function () {
+        var e = [],
+          t = {};
+        if (s && s.combinationChoose)
+          for (var n = 0; n < s.combinationChoose.length; n++) {
+            var i = s.combinationChoose[n];
+            e.push(i.id + '-' + i.value),
+              t[i.id] = !0
+          }
+
+        if (s && s.split)
+          for (var o = 0; o < s.split.length; o++)
+            t[(i = s.split[o]).id] || e.push(i.id + '-' + i.value);
+
+        return e.join('|')
+      }()) && (t += '&cc=' + n), (n = function () {
+        var e = {},
+          t = [];
+        if (w.VWO && Array.isArray(w.VWO))
+          for (var n = 0; n < w.VWO.length; n++) {
+            var i = w.VWO[n];
+            if (Array.isArray(i) && 'setVariation' === i[0] && i[1] && Array.isArray(i[1]))
+              for (var o = 0; o < i[1].length; o++) {
+                var r,
+                  a = i[1][o];
+                a && 'object' == typeof a && (r = a.e, a = a.v, r && a && (e[r] = a))
+              }
+
+          }
+
+        for (r in e)
+          t.push(r + '-' + e[r]);
+
+        return t.join('|')
+      }()) && (t += '&sv=' + n)),
+        s && s.optOut && (t += '&o=' + s.optOut);
+      var n = function () {
+        var e = [],
+          t = {};
+        if (s && s.exclude)
+          for (var n = 0; n < s.exclude.length; n++) {
+            var i = s.exclude[n];
+            t[i.id] || (e.push(i.id), t[i.id] = !0)
+          }
+
+        return e.join('|')
+      }();
+      return n && (t += '&e=' + n),
+        s && s.uuid && (t += '&id=' + s.uuid),
+        s && s.consent && (t += '&consent=' + s.consent),
+        w.name && -1 < w.name.indexOf('_vis_preview') && (t += '&pM=true'),
+        w.VWO && w.VWO.ed && (t += '&ed=' + w.VWO.ed),
+        t
+    }
+    code = {
+      nonce: v && v.nonce,
+      library_tolerance: function () {
+        return 'undefined' != typeof library_tolerance ? library_tolerance : void 0
+      },
+      settings_tolerance: function () {
+        return cc.sT || settings_tolerance
+      },
+      hide_element_style: function () {
+        return '{' + (
+          cc.hES || hide_element_style
+        ) + '}'
+      },
+      hide_element: function () {
+        return performance.getEntriesByName('first-contentful-paint')[0] ? '' : 'string' == typeof cc.hE ? cc.hE : hide_element
+      },
+      getVersion: function () {
+        return version
+      },
+      finish: function (e) {
+        var t;
+        f || (f = !0, (t = d.getElementById('_vis_opt_path_hides')) && t.parentNode.removeChild(t), e && ((new Image).src = 'https://dev.visualwebsiteoptimizer.com/ee.gif?a=' + account_id + e))
+      },
+      finished: function () {
+        return f
+      },
+      addScript: function (e) {
+        var t = d.createElement('script');
+        t.type = 'text/javascript',
+          e.src ? t.src = e.src : t.text = e.text,
+          v && t.setAttribute('nonce', v.nonce),
+          d.getElementsByTagName('head')[0].appendChild(t)
+      },
+      load: function (e, t) {
+        t = t || {};
+        var n = new XMLHttpRequest;
+        n.open('GET', e, !0),
+          n.withCredentials = !t.dSC,
+          n.responseType = t.responseType || 'text',
+          n.onload = function () {
+            if (t.onloadCb)
+              return t.onloadCb(n, e);
+
+            200 === n.status ? _vwo_code.addScript({ text: n.responseText }) : _vwo_code.finish('&e=loading_failure:' + e)
+          },
+          n.onerror = function () {
+            if (t.onerrorCb)
+              return t.onerrorCb(e);
+
+            _vwo_code.finish('&e=loading_failure:' + e)
+          },
+          n.send()
+      },
+      init: function () {
+        var e,
+          t = this.settings_tolerance();
+        w._vwo_settings_timer = setTimeout(function () {
+          _vwo_code.finish()
+        }, t),
+          'body' !== this.hide_element() ? (n = d.createElement('style'), e = (t = this.hide_element()) ? t + this.hide_element_style() : '', t = d.getElementsByTagName('head')[0], n.setAttribute('id', '_vis_opt_path_hides'), v && n.setAttribute('nonce', v.nonce), n.setAttribute('type', 'text/css'), n.styleSheet ? n.styleSheet.cssText = e : n.appendChild(d.createTextNode(e)), t.appendChild(n)) : (n = d.getElementsByTagName('head')[0], (e = d.createElement('div')).style.cssText = 'z-index: 2147483647 !important;position: fixed !important;left: 0 !important;top: 0 !important;width: 100% !important;height: 100% !important;background: white !important;', e.setAttribute('id', '_vis_opt_path_hides'), e.classList.add('_vis_hide_layer'), n.parentNode.insertBefore(e, n.nextSibling));
+        var n = 'https://dev.visualwebsiteoptimizer.com/j.php?' + i();
+        -1 !== w.location.search.indexOf('_vwo_xhr') ? this.addScript({ src: n }) : this.load(n + '&x=true', { l: 1 })
+      }
+    };
+    w._vwo_code = code;
+    code.init();
+  })();
+</script>
+<!-- End VWO Async SmartCode -->
+        <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "9bf62fc1860d4f05bb12e17f2aee9d3e"}'></script>
+            <!-- Bugsnag Performance snippet for inclusion into twig templates -->
+<!-- From https://docs.bugsnag.com/performance/integration-guides/web/ -->
+
+<script type="module">
+  import BugsnagPerformance from "//d2wy8f7a9ursnm.cloudfront.net/v2/bugsnag-performance.min.js";
+
+  const hostname = window.location.hostname;
+  let releaseStage = "development";
+  if (/www\.pagerduty\.com/.test(hostname)) releaseStage = "production";
+  else if (/staging/.test(hostname)) releaseStage = "staging";
+
+  // Bugsnag Performance
+  BugsnagPerformance.start({
+    apiKey: "b6499f73a94766f8735d4634b5b3085f",
+    appVersion: window.pd?.appVersion || "Not set",
+    releaseStage: releaseStage,
+    enabledReleaseStages: ["production"],
+  });
+</script>
+
+      <!-- Image source snippet for inclusion into twig templates -->
+
+<script>
+  if (typeof onImageError === "undefined") {
+    onImageError = function () {
+      this.onerror = null;
+
+      // If the image is part of a picture element, update all sources
+      if (this.parentNode instanceof HTMLPictureElement) {
+        Array.from(this.parentNode.children).forEach((child) => {
+          child.srcset = this.src;
+        });
+      }
+      // Otherwise, update the image srcset
+      else {
+        this.srcset = this.src;
+      }
+    };
+  }
+</script>
+
+      <script defer src="/wp-content/themes/citizens-band/js/build/layout-www-default.min.js?ver=9c1f5da06fada45670b3ab5b6188b195ec7e6203"></script>
+                  <script src="https://cdn.cookielaw.org/scripttemplates/otSDKStub.js"
+              type="text/javascript"
+              charset="UTF-8"
+              data-domain-script="a81929ae-2ada-45d6-b686-853c02c2b6c2" ></script>
+
+                    
+      <meta name='robots' content='index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1' />
+
+	<!-- This site is optimized with the Yoast SEO Premium plugin v27.9 (Yoast SEO v28.0) - https://yoast.com/product/yoast-seo-premium-wordpress/ -->
+	<meta name="description" content="Learn about MTTR (Mean Time To Repair, Recover, Respond, Resolve) and why it&#039;s crucial for businesses to establish their preferred interpretation." />
+	<link rel="canonical" href="https://www.pagerduty.com/resources/devops/learn/what-is-mttr/" />
+	<meta property="og:locale" content="en_US" />
+	<meta property="og:type" content="article" />
+	<meta property="og:title" content="What is MTTR?" />
+	<meta property="og:description" content="Learn about MTTR (Mean Time To Repair, Recover, Respond, Resolve) and why it&#039;s crucial for businesses to establish their preferred interpretation." />
+	<meta property="og:url" content="https://www.pagerduty.com/resources/incident-management-response/learn/reduce-mttr-2026-guide/" />
+	<meta property="og:site_name" content="PagerDuty" />
+	<meta property="article:publisher" content="https://business.facebook.com/PagerDuty/" />
+	<meta property="article:modified_time" content="2026-08-14T20:02:42+00:00" />
+	<meta property="og:image" content="https://cdn.pagerduty.com/wp-content/uploads/2024/08/generic-video-pagerduty-background.jpg" />
+	<meta property="og:image:width" content="1900" />
+	<meta property="og:image:height" content="1069" />
+	<meta property="og:image:type" content="image/jpeg" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:site" content="@pagerduty" />
+	<meta name="twitter:label1" content="Est. reading time" />
+	<meta name="twitter:data1" content="5 minutes" />
+	<script type="application/ld+json" class="yoast-schema-graph">{"@context":"https:\/\/schema.org","@graph":[{"@type":"WebPage","@id":"https:\/\/www.pagerduty.com\/resources\/devops\/learn\/what-is-mttr\/","url":"https:\/\/www.pagerduty.com\/resources\/incident-management-response\/learn\/reduce-mttr-2026-guide\/","name":"What is MTTR? | PagerDuty","isPartOf":{"@id":"https:\/\/www.pagerduty.com\/#website"},"datePublished":"2023-07-25T23:53:43+00:00","dateModified":"2026-08-14T20:02:42+00:00","description":"Learn about MTTR (Mean Time To Repair, Recover, Respond, Resolve) and why it's crucial for businesses to establish their preferred interpretation.","breadcrumb":{"@id":"https:\/\/www.pagerduty.com\/resources\/incident-management-response\/learn\/reduce-mttr-2026-guide\/#breadcrumb"},"inLanguage":"en-US","potentialAction":[{"@type":"ReadAction","target":["https:\/\/www.pagerduty.com\/resources\/incident-management-response\/learn\/reduce-mttr-2026-guide\/"]}]},{"@type":"BreadcrumbList","@id":"https:\/\/www.pagerduty.com\/resources\/incident-management-response\/learn\/reduce-mttr-2026-guide\/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https:\/\/www.pagerduty.com\/"},{"@type":"ListItem","position":2,"name":"Articles","item":"https:\/\/www.pagerduty.com\/resources\/%article_category%\/learn\/"},{"@type":"ListItem","position":3,"name":"What is MTTR?"}]},{"@type":"WebSite","@id":"https:\/\/www.pagerduty.com\/#website","url":"https:\/\/www.pagerduty.com\/","name":"PagerDuty","description":"Build It | Ship It | Own It","publisher":{"@id":"https:\/\/www.pagerduty.com\/#organization"},"potentialAction":[{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https:\/\/www.pagerduty.com\/?s={search_term_string}"},"query-input":{"@type":"PropertyValueSpecification","valueRequired":true,"valueName":"search_term_string"}}],"inLanguage":"en-US"},{"@type":"Organization","@id":"https:\/\/www.pagerduty.com\/#organization","name":"PagerDuty","url":"https:\/\/www.pagerduty.com\/","logo":{"@type":"ImageObject","inLanguage":"en-US","@id":"https:\/\/www.pagerduty.com\/#\/schema\/logo\/image\/","url":"https:\/\/cdn.pagerduty.com\/wp-content\/uploads\/2022\/11\/PagerDuty-Green-logo.svg","contentUrl":"https:\/\/cdn.pagerduty.com\/wp-content\/uploads\/2022\/11\/PagerDuty-Green-logo.svg","width":1,"height":1,"caption":"PagerDuty"},"image":{"@id":"https:\/\/www.pagerduty.com\/#\/schema\/logo\/image\/"},"sameAs":["https:\/\/business.facebook.com\/PagerDuty\/","https:\/\/x.com\/pagerduty","https:\/\/www.instagram.com\/pagerduty\/","https:\/\/www.linkedin.com\/company\/pagerduty"]}]}</script>
+	<!-- / Yoast SEO Premium plugin. -->
+
+
+<link rel="alternate" title="oEmbed (JSON)" type="application/json+oembed" href="https://www.pagerduty.com/wp-json/oembed/1.0/embed?url=https%3A%2F%2Fwww.pagerduty.com%2Fresources%2Fdevops%2Flearn%2Fwhat-is-mttr%2F" />
+<link rel="alternate" title="oEmbed (XML)" type="text/xml+oembed" href="https://www.pagerduty.com/wp-json/oembed/1.0/embed?url=https%3A%2F%2Fwww.pagerduty.com%2Fresources%2Fdevops%2Flearn%2Fwhat-is-mttr%2F&#038;format=xml" />
+<style id="wp-img-auto-sizes-contain-inline-css">
+img:is([sizes=auto i],[sizes^="auto," i]){contain-intrinsic-size:3000px 1500px}
+/*# sourceURL=wp-img-auto-sizes-contain-inline-css */
+</style>
+<style id="classic-theme-styles-inline-css">
+/*! This file is auto-generated */
+.wp-block-button__link{color:#fff;background-color:#32373c;border-radius:9999px;box-shadow:none;text-decoration:none;padding:calc(.667em + 2px) calc(1.333em + 2px);font-size:1.125em}.wp-block-file__button{background:#32373c;color:#fff;text-decoration:none}
+/*# sourceURL=/wp-includes/css/classic-themes.min.css */
+</style>
+
+<style id="global-styles-inline-css">
+:root{--wp--preset--aspect-ratio--square: 1;--wp--preset--aspect-ratio--4-3: 4/3;--wp--preset--aspect-ratio--3-4: 3/4;--wp--preset--aspect-ratio--3-2: 3/2;--wp--preset--aspect-ratio--2-3: 2/3;--wp--preset--aspect-ratio--16-9: 16/9;--wp--preset--aspect-ratio--9-16: 9/16;--wp--preset--color--black: #000000;--wp--preset--color--cyan-bluish-gray: #abb8c3;--wp--preset--color--white: #ffffff;--wp--preset--color--pale-pink: #f78da7;--wp--preset--color--vivid-red: #cf2e2e;--wp--preset--color--luminous-vivid-orange: #ff6900;--wp--preset--color--luminous-vivid-amber: #fcb900;--wp--preset--color--light-green-cyan: #7bdcb5;--wp--preset--color--vivid-green-cyan: #00d084;--wp--preset--color--pale-cyan-blue: #8ed1fc;--wp--preset--color--vivid-cyan-blue: #0693e3;--wp--preset--color--vivid-purple: #9b51e0;--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple: linear-gradient(135deg,rgb(6,147,227) 0%,rgb(155,81,224) 100%);--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan: linear-gradient(135deg,rgb(122,220,180) 0%,rgb(0,208,130) 100%);--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange: linear-gradient(135deg,rgb(252,185,0) 0%,rgb(255,105,0) 100%);--wp--preset--gradient--luminous-vivid-orange-to-vivid-red: linear-gradient(135deg,rgb(255,105,0) 0%,rgb(207,46,46) 100%);--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray: linear-gradient(135deg,rgb(238,238,238) 0%,rgb(169,184,195) 100%);--wp--preset--gradient--cool-to-warm-spectrum: linear-gradient(135deg,rgb(74,234,220) 0%,rgb(151,120,209) 20%,rgb(207,42,186) 40%,rgb(238,44,130) 60%,rgb(251,105,98) 80%,rgb(254,248,76) 100%);--wp--preset--gradient--blush-light-purple: linear-gradient(135deg,rgb(255,206,236) 0%,rgb(152,150,240) 100%);--wp--preset--gradient--blush-bordeaux: linear-gradient(135deg,rgb(254,205,165) 0%,rgb(254,45,45) 50%,rgb(107,0,62) 100%);--wp--preset--gradient--luminous-dusk: linear-gradient(135deg,rgb(255,203,112) 0%,rgb(199,81,192) 50%,rgb(65,88,208) 100%);--wp--preset--gradient--pale-ocean: linear-gradient(135deg,rgb(255,245,203) 0%,rgb(182,227,212) 50%,rgb(51,167,181) 100%);--wp--preset--gradient--electric-grass: linear-gradient(135deg,rgb(202,248,128) 0%,rgb(113,206,126) 100%);--wp--preset--gradient--midnight: linear-gradient(135deg,rgb(2,3,129) 0%,rgb(40,116,252) 100%);--wp--preset--font-size--small: 13px;--wp--preset--font-size--medium: 20px;--wp--preset--font-size--large: 36px;--wp--preset--font-size--x-large: 42px;--wp--preset--spacing--20: 0.44rem;--wp--preset--spacing--30: 0.67rem;--wp--preset--spacing--40: 1rem;--wp--preset--spacing--50: 1.5rem;--wp--preset--spacing--60: 2.25rem;--wp--preset--spacing--70: 3.38rem;--wp--preset--spacing--80: 5.06rem;--wp--preset--shadow--natural: 6px 6px 9px rgba(0, 0, 0, 0.2);--wp--preset--shadow--deep: 12px 12px 50px rgba(0, 0, 0, 0.4);--wp--preset--shadow--sharp: 6px 6px 0px rgba(0, 0, 0, 0.2);--wp--preset--shadow--outlined: 6px 6px 0px -3px rgb(255, 255, 255), 6px 6px rgb(0, 0, 0);--wp--preset--shadow--crisp: 6px 6px 0px rgb(0, 0, 0);}:where(body) { margin: 0; }:where(.is-layout-flex){gap: 0.5em;}:where(.is-layout-grid){gap: 0.5em;}body .is-layout-flex{display: flex;}.is-layout-flex{flex-wrap: wrap;align-items: center;}.is-layout-flex > :is(*, div){margin: 0;}body .is-layout-grid{display: grid;}.is-layout-grid > :is(*, div){margin: 0;}body{padding-top: 0px;padding-right: 0px;padding-bottom: 0px;padding-left: 0px;}:root :where(.wp-element-button, .wp-block-button__link){background-color: #32373c;border-width: 0;color: #fff;font-family: inherit;font-size: inherit;font-style: inherit;font-weight: inherit;letter-spacing: inherit;line-height: inherit;padding-top: calc(0.667em + 2px);padding-right: calc(1.333em + 2px);padding-bottom: calc(0.667em + 2px);padding-left: calc(1.333em + 2px);text-decoration: none;text-transform: inherit;}.has-black-color{color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-color{color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-color{color: var(--wp--preset--color--white) !important;}.has-pale-pink-color{color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-color{color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-color{color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-color{color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-color{color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-color{color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-color{color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-color{color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-color{color: var(--wp--preset--color--vivid-purple) !important;}.has-black-background-color{background-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-background-color{background-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-background-color{background-color: var(--wp--preset--color--white) !important;}.has-pale-pink-background-color{background-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-background-color{background-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-background-color{background-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-background-color{background-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-background-color{background-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-background-color{background-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-background-color{background-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-background-color{background-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-background-color{background-color: var(--wp--preset--color--vivid-purple) !important;}.has-black-border-color{border-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-border-color{border-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-border-color{border-color: var(--wp--preset--color--white) !important;}.has-pale-pink-border-color{border-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-border-color{border-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-border-color{border-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-border-color{border-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-border-color{border-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-border-color{border-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-border-color{border-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-border-color{border-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-border-color{border-color: var(--wp--preset--color--vivid-purple) !important;}.has-vivid-cyan-blue-to-vivid-purple-gradient-background{background: var(--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple) !important;}.has-light-green-cyan-to-vivid-green-cyan-gradient-background{background: var(--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan) !important;}.has-luminous-vivid-amber-to-luminous-vivid-orange-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange) !important;}.has-luminous-vivid-orange-to-vivid-red-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-orange-to-vivid-red) !important;}.has-very-light-gray-to-cyan-bluish-gray-gradient-background{background: var(--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray) !important;}.has-cool-to-warm-spectrum-gradient-background{background: var(--wp--preset--gradient--cool-to-warm-spectrum) !important;}.has-blush-light-purple-gradient-background{background: var(--wp--preset--gradient--blush-light-purple) !important;}.has-blush-bordeaux-gradient-background{background: var(--wp--preset--gradient--blush-bordeaux) !important;}.has-luminous-dusk-gradient-background{background: var(--wp--preset--gradient--luminous-dusk) !important;}.has-pale-ocean-gradient-background{background: var(--wp--preset--gradient--pale-ocean) !important;}.has-electric-grass-gradient-background{background: var(--wp--preset--gradient--electric-grass) !important;}.has-midnight-gradient-background{background: var(--wp--preset--gradient--midnight) !important;}.has-small-font-size{font-size: var(--wp--preset--font-size--small) !important;}.has-medium-font-size{font-size: var(--wp--preset--font-size--medium) !important;}.has-large-font-size{font-size: var(--wp--preset--font-size--large) !important;}.has-x-large-font-size{font-size: var(--wp--preset--font-size--x-large) !important;}
+/*# sourceURL=global-styles-inline-css */
+</style>
+
+<link rel="https://api.w.org/" href="https://www.pagerduty.com/wp-json/" /><link rel="EditURI" type="application/rsd+xml" title="RSD" href="https://www.pagerduty.com/xmlrpc.php?rsd" />
+<link rel='shortlink' href='https://www.pagerduty.com/?p=83396' />
+<meta name="content_type" content="ARTICLES" />
+
+
+    
+  <script defer src="/wp-content/themes/citizens-band/js/build/articles.min.js?ver=9c1f5da06fada45670b3ab5b6188b195ec7e6203"></script>
+  <script>
+    window.pd = window.pd || {};
+    pd.cfData = {"country":"CN","region":"Guangdong","continent":"AS","rayId":"a3e78cb01dc48e91"};
+  </script></head>
+
+  <body  class="relative" >
+    <noscript>
+      <iframe
+        src="https://obs.thisgreencolumn.com/ns/313a1c6c53fc549b6cf9213d79f8ac28.ht
+             ml?ch=cheq4ppc" width="0" height="0" style="display:none"></iframe>
+    </noscript>
+                  <aside id="butter-bar"
+       data-butter-bar-is-visible="true"
+       class="butter-bar-hidden">
+  <style>
+    #butter-bar {
+        max-height: 48px;
+        overflow: hidden;
+        transform: translate3d(0, 0, 0);     }
+    #butter-bar.butter-bar-hidden {
+        max-height: 0;
+        transform: translate3d(0, 0, 0);         transition: max-height 0.3s ease-in-out, transform 0.3s ease-in-out;
+    }
+    .butter-bar {
+        display: none;
+        overflow: hidden;
+        height: 48px;background-color: #005a24;}
+    .butter-bar-link {
+        margin-inline: auto;padding-inline: calc(0.25rem * 4);
+        color: white;        font-size: 16px;
+    }
+    .butter-bar-link:hover {
+        color: white;    }
+    .butter-bar-element {
+        display: flex;gap: calc(0.25rem * 4);
+        align-items: center;
+        height: 48px;
+    }
+    .butter-bar-element > .js-cta {
+        color: #adf07e;        font-weight: 400;
+        text-decoration: underline;
+    }
+    #div-btn-close-butter-bar {
+        height: 48px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    #btn-close-butter-bar {
+        margin-inline-end: calc(0.25rem * 4);
+        padding: 0 calc(0.25rem * 2) 2px;
+        border-radius: 1rem;        cursor: pointer;
+        color: white;    }
+    #btn-close-butter-bar:hover {
+        color: #000;        background-color: white;    }
+    @media (min-width: 1080px) {
+        .butter-bar {
+            display: grid;grid-template-columns: calc(0.25rem * 8) 1fr min-content;
+            gap: calc(0.25rem * 4);
+            justify-content: center;
+        }
+    }
+
+              
+    
+      </style>
+
+  <div class="butter-bar" data-track-organism="butter-bar">
+    <span> <!-- filler --></span>
+    <div class="flex flex-col butter-bar-content">
+                <a href="/drops/"
+    target="_blank"
+    rel="noopener"
+    data-track-event="Button Clicked"
+    class="butter-bar-link">
+
+    <div class="butter-bar-element">
+      <span class="js-copy text-pretty">
+        Explore our top new Generally Available and Early Access features.
+      </span>
+      <span class="js-cta flex-none">
+        View Product Drops
+      </span>
+      
+    </div>
+  </a>
+
+                      </div>
+    <div id="div-btn-close-butter-bar">
+      <a id="btn-close-butter-bar" class="js-close"> ✕ </a>
+    </div>
+  </div>
+</aside><nav
+  id="navigation"
+  aria-label="Main navigation"
+  cp-key="main-nav"
+>
+  <menu
+    aria-label="Main menu"
+    cp-key="top-menu"
+  >
+    <li cp-key="logo-menu-item">
+      <a
+        href="/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_pd-logo"
+        cp-key="logo-btn"
+        cp-set="menu-btn"
+      >
+        <img
+          id="logo-pagerduty"
+          alt="PagerDuty logo"
+          src="/wp-content/themes/citizens-band/images/logos/pagerduty-monochrome.svg"
+          width="122"
+          height="25"
+        >
+      </a>
+    </li>
+
+    <li cp-key="services-menu-item">
+      <menu
+        id="dropdown-btns-menu"
+        aria-label="Main PagerDuty services and content"
+        cp-key="services-menu"
+      ><li><label
+                        cp-key="dropdown-btn"
+            cp-set="menu-btn"
+            >
+            Products<input
+                type="radio"
+                name="dropdown-visibility"
+                id="target-dd-products"
+                data-track-event="nav-clicked-v4"
+  data-track-props="nav_products"
+                cp-key="dropdown-icon"
+              ></label>
+          </li><li><label
+                        cp-key="dropdown-btn"
+            cp-set="menu-btn"
+            >
+            Solutions<input
+                type="radio"
+                name="dropdown-visibility"
+                id="target-dd-solutions"
+                data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions"
+                cp-key="dropdown-icon"
+              ></label>
+          </li><li><a
+            href="/pricing/incident-management/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_pricing"            cp-key="link-btn"
+            cp-set="menu-btn"
+            >
+            Pricing</a>
+          </li><li><label
+                        cp-key="dropdown-btn"
+            cp-set="menu-btn"
+            >
+            Company<input
+                type="radio"
+                name="dropdown-visibility"
+                id="target-dd-company"
+                data-track-event="nav-clicked-v4"
+  data-track-props="nav_company"
+                cp-key="dropdown-icon"
+              ></label>
+          </li><li><label
+                        cp-key="dropdown-btn"
+            cp-set="menu-btn"
+            >
+            Resources<input
+                type="radio"
+                name="dropdown-visibility"
+                id="target-dd-resources"
+                data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources"
+                cp-key="dropdown-icon"
+              ></label>
+          </li></menu>
+    </li>
+
+    <li cp-key="tools-menu-item">
+      <menu
+        id="tools-btns-menu"
+        aria-label="Search and Language"
+        cp-key="tools-menu"
+      >
+        <li cp-key="search-menu-item">
+          <a
+            href="/search/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_search"
+            cp-key="search-btn"
+            cp-set="menu-btn"
+          >
+            <svg
+              viewbox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            >
+              <title>Search</title>
+              <circle cx="11" cy="11" r="8" vector-effect="non-scaling-stroke"></circle>
+              <path d="m21 21-4-4" vector-effect="non-scaling-stroke"></path>
+            </svg>
+          </a>
+        </li>
+
+        <li cp-key="lang-picker-menu-item">
+          <lang-picker>
+            <label
+              cp-key="lang-picker-btn"
+              cp-set="menu-btn"
+            >
+              <input
+                type="checkbox"
+                data-track-event="nav-clicked-v4"
+  data-track-props="nav_lang_picker"
+              >
+            </label>
+            <lang-picker-options
+              class="z-modal round shadow-md px-4 py-2"
+            >
+              <menu><li>
+                    <a
+                      href="/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_lang_picker_english"
+                      data-target="0"
+                      class="block p-2 text-black hover:text-green"
+                    >
+                      English
+                    </a>
+                  </li>
+                <li>
+                    <a
+                      href="/de/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_lang_picker_deutsch"
+                      data-target="1"
+                      class="block p-2 text-black hover:text-green"
+                    >
+                      Deutsch
+                    </a>
+                  </li>
+                <li>
+                    <a
+                      href="/fr/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_lang_picker_francais"
+                      data-target="2"
+                      class="block p-2 text-black hover:text-green"
+                    >
+                      Français
+                    </a>
+                  </li>
+                <li>
+                    <a
+                      href="https://www.pagerduty.co.jp/"
+  target="_blank"  data-track-event="nav-clicked-v4"
+  data-track-props="nav_lang_picker_japanese"
+                      data-target="3"
+                      class="block p-2 text-black hover:text-green"
+                    >
+                      日本語
+                    </a>
+                  </li>
+                              </menu>
+            </lang-picker-options>
+          </lang-picker>
+        </li>
+
+        <li cp-key="contact-menu-item">
+          <a
+            href="/contact-us/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_contact-us"
+            cp-key="contact-btn"
+            cp-set="menu-btn"
+          >
+            Contact Us
+          </a>
+        </li>
+      </menu>
+    </li>
+
+    <li cp-key="login-menu-item">
+      <a
+        href="https://app.pagerduty.com/"
+        data-track-event="nav-clicked-v4"
+  data-track-props="nav_log-in"
+        cp-key="login-btn"
+        cp-set="menu-btn"
+      >
+        Log In
+      </a>
+    </li>
+
+    <li cp-key="trial-menu-item">
+      <a
+        href="/sign-up/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_get-started"
+        cp-key="trial-btn"
+        cp-set="btn-primary menu-btn"
+      >
+       Start for Free
+      </a>
+    </li>
+
+    <li cp-key="mobile-menu-item">
+            <label
+        cp-key="mobile-btn"
+        cp-set="menu-btn"
+      >
+        <input type="checkbox" class="sr-only">
+        <svg
+          viewbox="0 0 24 24"
+          width="24"
+          height="24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="3"
+        >
+          <title>Mobile menu icon</title>
+          <path icon-closed d="M22 18H2m20-6H2M22 6H2" vector-effect="non-scaling-stroke"></path>
+          <path icon-opened d="m7 17L17 7m0 10L7 7" vector-effect="non-scaling-stroke"></path>
+        </svg>
+      </label>
+    </li>
+  </menu>
+
+  <nav-dropdowns
+    id="nav-dropdowns"
+    role="group"
+    aria-label="Dropdowns"
+  >
+    <noscript>
+      <label id="dropdown-visibility-close-btn"
+             class="container mx-auto px-4 pt-2 -mb-2 text-green hover:text-green-dark cursor-pointer flex">
+        <svg viewbox="0 0 24 24" width="24" height="24" class="block ml-auto">
+          <circle cx="12" cy="12" r="12" fill="currentColor"></circle>
+          <path d="m7 17L17 7m0 10L7 7" fill="none" stroke="white" stroke-width="2"></path>
+        </svg>
+        <input type="radio" name="dropdown-visibility" class="sr-only">
+      </label>
+    </noscript>  <nav-dropdown id="dropdown-products" role="group" aria-label="Products">
+    <label cp-set="btn-primary subtab-visibility products-products">
+      <input
+        id="target-products-products"
+        type="radio"
+        name="dropdown-subtab-visibility"
+        checked        data-track-event="nav-clicked-v4"
+  >
+      Products
+    </label>      <toggle-details id="products-products">
+    <label>
+      <h2>Products</h2>
+      <input type="checkbox">
+    </label>
+    <details-content>
+      <article top-bar="products">
+        <a
+    href="/platform/operations-cloud/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_ops-cloud"
+    cp-set="link leaf-link"  >    <h3>PagerDuty Operations Cloud</h3>
+    <p>The platform for mission-critical work in the modern enterprise.</p></a>
+      </article>
+
+      <article sub-tab="products">          <a
+    href="/platform/incident-management/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_products_incident-management"
+    cp-set="link leaf-link"  >    <h3>Incident Management</h3>
+    <p>End-to-end orchestration for rapid issue resolution.</p></a>
+                  <a
+    href="/ai/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_products_ai_at_pagerduty"
+    cp-set="link leaf-link"  >    <h3>AI at PagerDuty</h3>
+    <p>Revolutionize operations at the speed of AI.</p></a>
+                  <a
+    href="/platform/automation/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_products_process-automation"
+    cp-set="link leaf-link"  >    <h3>Automation</h3>
+    <p>Accelerate critical work across the enterprise.</p></a>
+                  <a
+    href="/platform/ai-agents/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_products_ai_agents"
+    cp-set="link leaf-link"  >    <h3>AI Agents</h3>
+    <p>Redefine operations with AI Agents that ignite growth.</p></a>
+                  <a
+    href="/platform/business-ops/status-pages/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_products_status-pages"
+    cp-set="link leaf-link"  >    <h3>Status Pages</h3>
+    <p>A single source of truth for system status.</p></a>
+                  <a
+    href="/platform/generative-ai/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_products_advance"
+    cp-set="link leaf-link"  >    <h3>PagerDuty Advance</h3>
+    <p>Generative AI for critical operations work.</p></a>
+                  <a
+    href="/platform/business-ops/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_products_csops"
+    cp-set="link leaf-link"  >    <h3>Customer Service Ops</h3>
+    <p>Bridge support and engineering teams.</p></a>
+                  <a
+    href="/platform/aiops/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_products_aiops"
+    cp-set="link leaf-link"  >    <h3>AIOps</h3>
+    <p>Reduce alert noise and accelerate triage.</p></a>
+        </article>
+
+      <article side-panel="products">        <a
+    href="/drops/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_feature-product-drops"
+      >    <nav-card cp-set="card img-card">
+    <card-header>
+          <img
+      src="https://cdn.pagerduty.com/cdn-cgi/image/w=400,f=auto/images/home-pillar-bg.png"
+      alt="Learn more about new Generally Available and Early Access features"
+      width=""
+      height="334"
+      loading="lazy"
+    >
+  
+    </card-header>
+    <card-body>
+          <h2>Monthly Product Drops</h2>
+    <p>Learn more about new Generally Available and Early Access features</p>
+  
+    </card-body>
+    <card-footer>
+        ➔
+      </card-footer>
+    </nav-card>
+
+</a>            <nav-card cp-set="card cta-card">
+    <card-header>
+      Work how you want with PagerDuty.
+    </card-header>
+    <card-body>
+      
+    </card-body>
+    <card-footer>
+        <a
+    href="/integrations/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_bottom-bar_integrations"
+    cp-set="link btn-primary"  >Explore our 750+ integrations</a>
+      </card-footer>
+    </nav-card>
+
+
+      </article>
+    </details-content>
+  </toggle-details>
+<label cp-set="btn-primary subtab-visibility products-platform">
+      <input
+        id="target-products-platform"
+        type="radio"
+        name="dropdown-subtab-visibility"
+                data-track-event="nav-clicked-v4"
+  >
+      Platform
+    </label>      <toggle-details id="products-platform">
+    <label>
+      <h2>Platform</h2>
+      <input type="checkbox">
+    </label>
+    <details-content>
+      <article top-bar="products">
+        <a
+    href="/platform/operations-cloud/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_ops-cloud"
+    cp-set="link leaf-link"  >    <h3>PagerDuty Operations Cloud</h3>
+    <p>The platform for mission-critical work in the modern enterprise.</p></a>
+      </article>
+
+      <article sub-tab="products">          <a
+    href="https://developer.pagerduty.com/"
+  target="_blank"  data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_platform_developer-platform"
+    cp-set="link leaf-link"  >    <h3>Developer Platform</h3>
+    <p>Customize your PagerDuty experience.</p></a>
+                  <a
+    href="/services/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_platform_prof-services"
+    cp-set="link leaf-link"  >    <h3>Professional Services</h3>
+    <p>Get more value from PagerDuty.</p></a>
+                  <a
+    href="/security/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_platform_security"
+    cp-set="link leaf-link"  >    <h3>Security</h3>
+    <p>View our trust and compliance practices.</p></a>
+                  <a
+    href="/enterprise/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_platform_enterprise-class"
+    cp-set="link leaf-link"  >    <h3>Enterprise Class</h3>
+    <p>Secure, reliable, extensible, and scalable.</p></a>
+                  <a
+    href="/integrations/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_platform_integrations"
+    cp-set="link leaf-link"  >    <h3>Integrations</h3>
+    <p>Work how you want with PagerDuty.</p></a>
+        </article>
+
+      <article side-panel="products">        <a
+    href="/drops/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_feature-product-drops"
+      >    <nav-card cp-set="card img-card">
+    <card-header>
+          <img
+      src="https://cdn.pagerduty.com/cdn-cgi/image/w=400,f=auto/images/home-pillar-bg.png"
+      alt="Learn more about new Generally Available and Early Access features"
+      width=""
+      height="334"
+      loading="lazy"
+    >
+  
+    </card-header>
+    <card-body>
+          <h2>Monthly Product Drops</h2>
+    <p>Learn more about new Generally Available and Early Access features</p>
+  
+    </card-body>
+    <card-footer>
+        ➔
+      </card-footer>
+    </nav-card>
+
+</a>            <nav-card cp-set="card cta-card">
+    <card-header>
+      See how PagerDuty works for you.
+    </card-header>
+    <card-body>
+      
+    </card-body>
+    <card-footer>
+        <a
+    href="/request-a-demo/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_products_bottom-bar_request_demo"
+    cp-set="link btn-primary"  >Request a demo</a>
+      </card-footer>
+    </nav-card>
+
+
+      </article>
+    </details-content>
+  </toggle-details>
+
+  </nav-dropdown>
+  <nav-dropdown id="dropdown-solutions" role="group" aria-label="Solutions">
+          <toggle-details>
+    <label>
+      <h2>Solutions</h2>
+      <input type="checkbox">
+    </label>
+    <details-content>
+        <article dropdown-column="nav_solutions_solutions">
+              <toggle-details>
+    <label>
+            <h3>Solutions</h3>
+    
+      <input type="checkbox">
+    </label>
+    <details-content>
+      <a
+    href="/solutions/incident-management-transformation"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_solutions_incident_management_transformation"
+    cp-set="link leaf-link"  >Incident Management Transformation</a><a
+    href="/solutions/operations-center-modernization/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_solutions_operations_center_modernization"
+    cp-set="link leaf-link"  >Operations Center Modernization</a><a
+    href="/solutions/automation-coe/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_solutions_automation_coe"
+    cp-set="link leaf-link"  >Automation Standardization</a><a
+    href="/solutions/cx-operations/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_solutions_cx_experience"
+    cp-set="link leaf-link"  >Customer Experience Operations</a><a
+    href="/solutions/digital-resilience/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_digital_resilience"
+    cp-set="link leaf-link"  >Digital Operations Resiliency</a><a
+    href="/solutions/scaled-service-ownership/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_solutions_scaled_service_ownership"
+    cp-set="link leaf-link"  >Scaled Service Ownership</a><a
+    href="/solutions/remote-location-operations-automation/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_solutions_remote_location_operations_automation"
+    cp-set="link leaf-link"  >Remote-Location Operations</a>
+    </details-content>
+  </toggle-details>
+
+  </article>
+  <article dropdown-column="nav_solutions_use_cases">
+              <toggle-details>
+    <label>
+            <h3>Use Cases</h3>
+    
+      <input type="checkbox">
+    </label>
+    <details-content>
+      <a
+    href="/use-cases/security-incident-management/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_use_cases_security-incident-management"
+    cp-set="link leaf-link"  >Security Incident Management</a><a
+    href="/use-cases/llmops/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_use_cases_llmops"
+    cp-set="link leaf-link"  >LLMOps</a><a
+    href="/use-cases/dataops/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_use_cases_dataops"
+    cp-set="link leaf-link"  >DataOps</a><a
+    href="/use-cases/finops/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_use_cases_finops"
+    cp-set="link leaf-link"  >FinOps</a><a
+    href="/use-cases/complianceops/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_use_cases_complianceops"
+    cp-set="link leaf-link"  >ComplianceOps</a><a
+    href="/use-cases/crisisops/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_use_cases_crisisops"
+    cp-set="link leaf-link"  >CrisisOps</a><a
+    href="/use-cases/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_see_all_use_cases"
+    cp-set="link leaf-link"  >See All Use Cases</a>
+    </details-content>
+  </toggle-details>
+
+  </article>
+  <article dropdown-column="nav_solutions_industries">
+              <toggle-details>
+    <label>
+            <h3>Industries</h3>
+    
+      <input type="checkbox">
+    </label>
+    <details-content>
+      <a
+    href="/industries/financial-services/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_industry_financial-services"
+    cp-set="link leaf-link"  >Financial Services</a><a
+    href="/industries/healthcare/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_industry_healthcare"
+    cp-set="link leaf-link"  >Healthcare</a><a
+    href="/industries/nonprofit/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_industry_non-profit"
+    cp-set="link leaf-link"  >Non Profit</a><a
+    href="/industries/government/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_industry_government"
+    cp-set="link leaf-link"  >Government</a><a
+    href="/industries/education/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_industry_education"
+    cp-set="link leaf-link"  >Education</a><a
+    href="/industries/retail/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_industry_retail"
+    cp-set="link leaf-link"  >Retail</a><a
+    href="/industries/ai-infrastructure/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_industry_ai-infrastructure"
+    cp-set="link leaf-link"  >AI Infrastructure</a>
+    </details-content>
+  </toggle-details>
+
+  </article>
+<article side-panel="">      <a
+    href="/in-perspective/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_feature-highlight_fox"
+      >    <nav-card cp-set="card img-card">
+    <card-header>
+          <img
+      src="https://cdn.pagerduty.com/wp-content/uploads/2024/01/nav-fox-corporation.png"
+      alt="FOX Customer Story"
+      width=""
+      height="196"
+      loading="lazy"
+    >
+  
+    </card-header>
+    <card-body>
+          <h2>Operational Integrity at FOX</h2>
+    <p>Learn how strategic technology investments powered FOX&#039;s digital and operational transformation.</p>
+  
+    </card-body>
+    <card-footer>
+        ➔
+      </card-footer>
+    </nav-card>
+
+</a>          <nav-card cp-set="card cta-card">
+    <card-header>
+      Work how you want with PagerDuty.
+    </card-header>
+    <card-body>
+      
+    </card-body>
+    <card-footer>
+        <a
+    href="/integrations/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_bottom-bar_integrations"
+    cp-set="link btn-primary"  >Explore our 750+ integrations</a>
+      </card-footer>
+    </nav-card>
+
+
+    </article>
+    </details-content>
+  </toggle-details>
+
+
+  </nav-dropdown>
+                  <nav-dropdown id="dropdown-pricing" role="group" aria-label="Pricing">
+    <a
+    href="/pricing/incident-management/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_pricing"
+      >Pricing</a>
+  </nav-dropdown>
+  <nav-dropdown id="dropdown-company" role="group" aria-label="Company">
+          <toggle-details>
+    <label>
+      <h2>Company</h2>
+      <input type="checkbox">
+    </label>
+    <details-content>
+        <article dropdown-column="nav_company_who-we-are">
+              <toggle-details>
+    <label>
+            <h3>Who We Are</h3>
+    
+      <input type="checkbox">
+    </label>
+    <details-content>
+      <a
+    href="/in-perspective/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_company_who-we-are_in-perspective"
+    cp-set="link leaf-link"  >Thought Leadership</a><a
+    href="/company/awards/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_company_who-we-are_awards"
+    cp-set="link leaf-link"  >Awards</a><a
+    href="https://careers.pagerduty.com/home"
+  target="_blank"  data-track-event="nav-clicked-v4"
+  data-track-props="nav_company_who-we-are_careers"
+    cp-set="link leaf-link"  >Careers</a><a
+    href="https://investor.pagerduty.com/overview/default.aspx"
+  target="_blank"  data-track-event="nav-clicked-v4"
+  data-track-props="nav_company_who-we-are_investor-relations"
+    cp-set="link leaf-link"  >Investor Relations</a><a
+    href="/leadership/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_company_who-we-are_leadership"
+    cp-set="link leaf-link"  >Leadership</a><a
+    href="/newsroom/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_company_who-we-are_newsroom"
+    cp-set="link leaf-link"  >Newsroom</a>
+    </details-content>
+  </toggle-details>
+
+  </article>
+<article sub-tab="nav_company">        <a
+    href="/company/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_company_about-us"
+    cp-set="link leaf-link"  >          <h2>About us</h2>
+          <p>We&#039;re empowering teams with the time and efficiency to build the future.</p>
+        </a>        <a
+    href="/impact-hub/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_company_impact"
+    cp-set="link leaf-link"  >          <h2>Our Impact</h2>
+          <p>See how we are building resilience and accelerating change.</p>
+        </a></article>
+    <article side-panel="nav_company">      <a
+    href="/assets/fy26-pagerduty-impact-report.pdf"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_company_feature-highlight_fy26-impact-report"
+      >    <nav-card cp-set="card img-card">
+    <card-header>
+          <img
+      src="https://cdn.pagerduty.com/cdn-cgi/image/f=auto,fit=scale-down,w=1080,dpr=2/wp-content/uploads/2026/06/Watch-Duty-PeteLongworth-Healdsburg-Firehouse-161-scaled.webp"
+      alt="FY26 Impact Report"
+      width=""
+      height="220"
+      loading="lazy"
+    >
+  
+    </card-header>
+    <card-body>
+          <h2>FY26 Impact Report</h2>
+    <p>Learn about our efforts around global employee engagement, sustainability, and more.</p>
+  
+    </card-body>
+    <card-footer>
+        ➔
+      </card-footer>
+    </nav-card>
+
+</a>
+    </article>
+    </details-content>
+  </toggle-details>
+
+
+  </nav-dropdown>
+  <nav-dropdown id="dropdown-resources" role="group" aria-label="Resources">
+          <toggle-details>
+    <label>
+      <h2>Resources</h2>
+      <input type="checkbox">
+    </label>
+    <details-content>
+        <article dropdown-column="nav_resources_resources">
+              <toggle-details>
+    <label>
+            <h3>Resources</h3>
+    
+      <input type="checkbox">
+    </label>
+    <details-content>
+      <a
+    href="/resources/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_resources_library"
+    cp-set="link leaf-link"  >Library</a><a
+    href="/blog/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_resources_blog"
+    cp-set="link leaf-link"  >Blog</a><a
+    href="/demo/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_resources_demo"
+    cp-set="link leaf-link"  >Demos</a><a
+    href="/resources/?type=webinar"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_resources_webinars"
+    cp-set="link leaf-link"  >Webinars</a><a
+    href="/events/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_resources_events"
+    cp-set="link leaf-link"  >Events</a><a
+    href="/resources/?type=ebook"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_resources_ebooks"
+    cp-set="link leaf-link"  >Ebooks</a>
+    </details-content>
+  </toggle-details>
+
+  </article>
+  <article dropdown-column="nav_solutions_customers">
+              <toggle-details>
+    <label>
+            <h3>Customer Stories</h3>
+    
+      <input type="checkbox">
+    </label>
+    <details-content>
+      <a
+    href="/customer/tui/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_customer_tui"
+    cp-set="link leaf-link"  >TUI</a><a
+    href="/customer/zoom-video-communications/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_customer_zoom"
+    cp-set="link leaf-link"  >Zoom</a><a
+    href="/customer/spotify-backstage/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_customer_spotify"
+    cp-set="link leaf-link"  >Spotify</a><a
+    href="/customer/draftkings/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_customer_draftkings"
+    cp-set="link leaf-link"  >DraftKings</a><a
+    href="/customer/australian-bank/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_customer_australian-bank"
+    cp-set="link leaf-link"  >Australian Bank</a><a
+    href="/customer/vodafone/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_customer_vodafone"
+    cp-set="link leaf-link"  >Vodafone</a><a
+    href="/customer/fox/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_customer_fox"
+    cp-set="link leaf-link"  >Fox Corporation</a><a
+    href="/customers/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_solutions_customer_all-customers"
+    cp-set="link leaf-link"  >See All Customers</a>
+    </details-content>
+  </toggle-details>
+
+  </article>
+  <article dropdown-column="nav_resources_learning">
+              <toggle-details>
+    <label>
+            <h3>Learning</h3>
+    
+      <input type="checkbox">
+    </label>
+    <details-content>
+      <a
+    href="/prompt-library/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_use_case_library"
+    cp-set="link leaf-link"  >Template and Prompt Library</a><a
+    href="https://university.pagerduty.com"
+  target="_blank"  data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_learning_pd-university"
+    cp-set="link leaf-link"  >PagerDuty University</a><a
+    href="https://community.pagerduty.com/"
+  target="_blank"  data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_learning_community"
+    cp-set="link leaf-link"  >Community</a><a
+    href="/ops-guides/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_support_ops-guides"
+    cp-set="link leaf-link"  >Ops Guides</a><a
+    href="https://support.pagerduty.com/"
+  target="_blank"  data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_support_knowledge-base"
+    cp-set="link leaf-link"  >Knowledge Base</a>
+    </details-content>
+  </toggle-details>
+
+  </article>
+<article side-panel="">      <a
+    href="/resources/news-announcements/video/pagerduty-on-tour-video-content/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_feature-highlight_pagerduty-on-tour"
+      >    <nav-card cp-set="card img-card">
+    <card-header>
+          <img
+      src="https://www.pagerduty.com/cdn-cgi/image/f=auto,w=720/https://cdn.pagerduty.com/wp-content/uploads/2025/01/pdot-resource-thumbnail.png"
+      alt="Get on-demand insights on AI-first operations."
+      width=""
+      height="185"
+      loading="lazy"
+    >
+  
+    </card-header>
+    <card-body>
+          <h2>PagerDuty on Tour</h2>
+    <p>Get on-demand insights on AI-first operations.</p>
+  
+    </card-body>
+    <card-footer>
+        ➔
+      </card-footer>
+    </nav-card>
+
+</a>          <nav-card cp-set="card cta-card">
+    <card-header>
+      Have a question? We&#039;re here to help.
+    </card-header>
+    <card-body>
+      
+    </card-body>
+    <card-footer>
+        <a
+    href="/contact-us/"
+    data-track-event="nav-clicked-v4"
+  data-track-props="nav_resources_bottom-bar_contact-us"
+    cp-set="link btn-primary"  >Contact Us</a>
+      </card-footer>
+    </nav-card>
+
+
+    </article>
+    </details-content>
+  </toggle-details>
+
+
+  </nav-dropdown>
+</nav-dropdowns>
+</nav>
+
+
+<script>
+  // Check if window.pd is undefined or null, then assign it an empty object
+  if (typeof window.pd === 'undefined' || window.pd === null) {
+    window.pd = {};
+  }
+
+  // Check if window.pd.nav is undefined or null, then assign it the specified object
+  if (typeof window.pd.nav === 'undefined' || window.pd.nav === null) {
+    window.pd.nav = { breakpoint: "1080px" };
+  }
+
+</script>
+<script async src="/wp-content/themes/citizens-band/js/build/navigation-v4.min.js?ver=9c1f5da06fada45670b3ab5b6188b195ec7e6203"></script>
+
+          
+    <main >
+        <section class="grid-container px-glg-md py-glg-md">
+    <div class="col-start-main-start col-end-main-end cms">
+      <div>
+                
+  <ul class='flex flex-wrap pl-0'>  </ul>
+
+      </div>
+    </div>
+    <div class="col-start-main-start col-end-main-end grid grid-cols-5 gap-y-16">
+            <div class="col-span-full md:col-span-4 flex flex-col gap-8 md:mr-32">
+                <div class="cms flex flex-col gap-4">
+                    <h1 class="text-xl sm:text-3xl text-pretty mt-0">What is MTTR?</h1>
+
+                              
+                              <div id="table-of-contents" class="cms hidden" role="navigation" aria-label="Table of Contents">
+            <span class="text-md">Table of contents:</span>
+          </div>
+
+                    
+                    <div id="article-content" class="max-w-[75ch] break-words">
+            
+<html><body><p><span style="font-weight: 400;">Every business is now a digital business, regardless of the industry it serves. This means companies need to work harder and faster to ensure constant but stable improvements to their operational performance. As a best practice, four key metrics can be used to monitor that performance &ndash; as per </span><a href="https://www.pagerduty.com/blog/strengthen-your-dora-metrics-with-pagerduty/"><span style="font-weight: 400;">Google&rsquo;s DevOps Research and Assessment (DORA) team research project</span></a><span style="font-weight: 400;">. </span><span style="font-weight: 400;"><br>
+</span><span style="font-weight: 400;"><br>
+</span><span style="font-weight: 400;">MTTR is one such metric and a truly relevant one to all incident response teams as it helps understanding how quickly they can respond to unplanned work. You might have seen different interpretations of the acronym MTTR: Mean Time to Repair, Recovery, Respond or Resolve. In this article, we will explore each MTTR interpretation, how to calculate it, the importance of establishing which one to use, and how to improve it.</span></p>
+<h2 id="heading-0"><strong>What is Mean Time to Repair?</strong></h2>
+<p><span style="font-weight: 400;">Mean Time To Repair (MTTR) refers to the average duration it takes to repair a system or device after a failure or malfunction occurs. It measures the efficiency of the repair process.</span><span style="font-weight: 400;"><br>
+</span><span style="font-weight: 400;"><br>
+</span><strong>How to Calculate Mean Time to Repair</strong></p>
+<p>Formula: Total repair time / Number of incidents.</p>
+<p><span style="font-weight: 400;">For example, if you had three incidents with repair times of 2 hours, 3 hours, and 4 hours, the total repair time would be 9 hours and the MTTR would be 3 hours (9/3=3).</span></p>
+<h2 id="heading-1"><strong>What is Mean Time to Recovery?</strong></h2>
+<p><span style="font-weight: 400;">Mean Time To Recovery (MTTR) refers to the average time it takes to recover from an incident or disruption and restore normal operations. It focuses on the overall recovery process, thus an important measure of a system or service&rsquo;s reliability and efficiency. </span><span style="font-weight: 400;"><br>
+</span><span style="font-weight: 400;"><br>
+</span><strong>How to Calculate Mean Time to Recovery</strong><span style="font-weight: 400;"><br>
+</span><b></b></p>
+<p>Formula: Downtime / Number of incidents<span style="font-weight: 400;">. </span></p>
+<p><span style="font-weight: 400;">For example, if a system was down for 20 minutes in two separate incidents in a given period, the MTTR would be 10 minutes (20/2=10).</span></p>
+<h2 id="heading-2"><strong>What is Mean Time to Respond?</strong></h2>
+<p><span style="font-weight: 400;">Mean Time To Respond (MTTR) measures the average time it takes to acknowledge and respond to an incident or customer inquiry. It focuses on the initial response and sets the foundation for subsequent actions. </span><span style="font-weight: 400;"><br>
+</span><span style="font-weight: 400;"><br>
+</span><span style="font-weight: 400;">While this metric sounds similar to Mean Time to Acknowledge (MTTA), it&rsquo;s important to note that Mean Time to Respond considers a larger part of the incident response process, essentially from an alert trigger to a response delivery; MTTA only measures the average time it takes to acknowledge an alert after it is triggered.&nbsp; </span><span style="font-weight: 400;"><br>
+</span><span style="font-weight: 400;"><br>
+</span><strong>How to Calculate Mean Time to Respond</strong></p>
+<p>Formula: Response time (from alert to resolution) / Number of incidents.</p>
+<p><span style="font-weight: 400;">For example, if you had</span> <span style="font-weight: 400;">2 incidents in a week and spent a total of one hour on them, your weekly MTTR would be 30 minutes (60/2 = 30).</span></p>
+<h2 id="heading-3"><b>What is Mean Time to Resolve?</b></h2>
+<p><span style="font-weight: 400;">Mean Time To Resolve (MTTR) is the average time it takes to fully resolve an incident or issue, including all necessary repairs, recoveries, and additional actions required to prevent reoccurrence. </span><span style="font-weight: 400;"><br>
+</span><span style="font-weight: 400;"><br>
+</span><strong>How to Calculate Mean Time to Resolve</strong><span style="font-weight: 400;"><br>
+</span><b></b></p>
+<p>Formula: Full resolution time / Number of incidents<span style="font-weight: 400;">. </span></p>
+<p><span style="font-weight: 400;">For example, systems were down for a total of three hours in a week due to a couple incidents. An additional hour was dedicated to deploying fixes to prevent future outages. The MTTR is two hours (4/2=2).</span></p>
+<h2 id="heading-4"><b>Why and How to Establish the Preferred MTTR Interpretation</b></h2>
+<p><span style="font-weight: 400;">Establishing the preferred interpretation of MTTR is essential to provide clarity and consistency in tracking and measuring performance. By clearly defining which aspect of incident management the MTTR metric focuses on, organizations can align processes and goals more efficiently and direct their efforts toward specific areas. This targeted approach enables organizations to streamline operations, reduce downtime, and enhance customer satisfaction.</span></p>
+<h2 id="heading-5"><b></b><b>How to improve MTTR?</b></h2>
+<p><span style="font-weight: 400;">Whatever the interpretation, the goal is always to minimize the MTTR. But the key steps to improve depend on what the organization&rsquo;s MTTR is focused on:</span></p>
+<table>
+<tbody>
+<tr>
+<td colspan="5">
+<p style="text-align: center;"><b>Key Steps to Improve MTTR</b></p>
+</td>
+</tr>
+<tr>
+<td>
+<p style="text-align: right;"><b>Metric</b></p>
+</td>
+<td style="text-align: center;"><span style="font-weight: 400;">Mean Time to</span> <b><br>
+</b><b>Repair</b></td>
+<td style="text-align: center;"><span style="font-weight: 400;">Mean Time to</span><b> Recovery</b></td>
+<td style="text-align: center;"><span style="font-weight: 400;">Mean Time to</span><b> Respond</b></td>
+<td style="text-align: center;"><span style="font-weight: 400;">Mean Time to </span><b><br>
+</b><b>Resolve</b></td>
+</tr>
+<tr>
+<td style="text-align: center;">
+<p style="text-align: right;"><b>Focus</b></p>
+</td>
+<td style="text-align: center;"><span style="font-weight: 400;">Ensuring repair efficiency</span></td>
+<td style="text-align: center;"><span style="font-weight: 400;">Identifying and streamlining bottlenecks</span></td>
+<td style="text-align: center;"><span style="font-weight: 400;">Ensuring prompt and efficient response to incidents</span></td>
+<td>
+<p style="text-align: center;"><span style="font-weight: 400;">Reducing resolution time and increasing overall productivity</span></p>
+</td>
+</tr>
+<tr>
+<td>
+<p style="text-align: right;"><b>Tactic</b></p>
+</td>
+<td>
+<ul>
+<li style="font-weight: 400;" aria-level="1"><span style="font-weight: 400;">Reducing diagnosis time</span></li>
+<li style="font-weight: 400;" aria-level="1"><span style="font-weight: 400;">Streamlining maintenance processes</span></li>
+</ul>
+</td>
+<td>
+<ul>
+<li style="font-weight: 400;" aria-level="1"><span style="font-weight: 400;">Improving incident response procedures</span></li>
+<li style="font-weight: 400;" aria-level="1"><span style="font-weight: 400;">Enhancing cross-functional communication</span></li>
+<li style="font-weight: 400;" aria-level="1"><span style="font-weight: 400;">Investing in backup and redundancy solutions</span></li>
+</ul>
+</td>
+<td>
+<ul>
+<li style="font-weight: 400;" aria-level="1"><span style="font-weight: 400;">Establishing escalation policies</span></li>
+<li style="font-weight: 400;" aria-level="1"><span style="font-weight: 400;">Providing training to support teams</span></li>
+</ul>
+</td>
+<td>
+<ul>
+<li style="font-weight: 400;" aria-level="1"><span style="font-weight: 400;">Adopting automation wherever possible</span></li>
+<li style="font-weight: 400;" aria-level="1"><span style="font-weight: 400;">Implementing postmortems</span></li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+<p><b>Quantify with Quality</b></p>
+<p><span style="font-weight: 400;">MTTR is a key metric to building an efficient incident management process. However, in order to effectively leverage the KPI to drive change in the right direction, the business must clearly define and align on their desired interpretation before tracking and measuring accordingly. Be it Mean Time to Repair, Recovery, Response, or Resolution, MTTR can inform on critical decisions leading to targeted improvements and operational and customer experience excellence. When paired with the right tools and processes, these KPIs can help your organization build operational maturity to grow past a manual reactive state towards a more proactive, preventative approach.</span><span style="font-weight: 400;"><br>
+</span><span style="font-weight: 400;"><br>
+</span><span style="font-weight: 400;">At PagerDuty, MTTR equals Mean Time to Resolve as our mission is to revolutionize operations and build customer trust by getting organizations ready for anything in a world of digital anything. The PagerDuty Operations Cloud&trade; harnesses the power of AI, automation and orchestration to simplify critical work, reduce costs and accelerate innovation in a single platform. It also includes new and improved analytics that go way beyond MTTR, offering granular insights on your digital operations true impact in your business. Learn how <a href="https://www.pagerduty.com/platform/aiops/">PagerDuty AIOps</a> can help you improve your metrics </span><span style="font-weight: 400;">and try the </span><a href="https://www.pagerduty.com/sign-up/"><span style="font-weight: 400;">PagerDuty 14-day free trial</span></a><span style="font-weight: 400;"> to experience the full power of the PagerDuty Operations Cloud&trade;.</span></p>
+</body></html>
+
+          </div>
+        </div>
+
+                <div class="flex flex-col gap-4">
+                    <div class="get-social">
+                
+      
+      
+  
+  <div class="flex gap-gut items-end">
+          <a  class="flex flex-col  text-green hover:text-green-dark transition" href="http://www.twitter.com/intent/tweet?url=https://www.pagerduty.com/resources/devops/learn/what-is-mttr/&amp;text=What%20is%20MTTR%3F%20%7C%20&amp;via=PagerDuty"
+          onclick="javascript:window.open(this.href,'', 'menubar=no,toolbar=no,resizable=yes,scrollbars=yes,height=600,width=600');return false;">
+            <svg viewBox="0 0 31.64 28.6" width="24"><g><path fill="currentColor" d="M24.91,0h4.85l-10.6,12.11,12.47,16.48h-9.76l-7.65-10-8.75,10H.62l11.34-12.96L0,0h10.01l6.91,9.14L24.91,0ZM23.21,25.69h2.69L8.55,2.75h-2.88l17.55,22.94Z" stroke-width="0"/></g><title>X</title></svg>
+  
+      </a>
+          <a  class="flex flex-col  text-green hover:text-green-dark transition" href="http://www.facebook.com/dialog/share?href=https://www.pagerduty.com/resources/devops/learn/what-is-mttr/&amp;display=popup&amp;app_id=280023502328575"
+          onclick="javascript:window.open(this.href,'', 'menubar=no,toolbar=no,resizable=yes,scrollbars=yes,height=600,width=600');return false;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" width="17">
+  <path fill="currentColor" d="M279.14 288l14.22-92.66h-88.91v-60.13c0-25.35 12.42-50.06 52.24-50.06h40.42V6.26S260.43 0 225.36 0c-73.22 0-121.08 44.38-121.08 124.72v70.62H22.89V288h81.39v224h100.17V288z"/>
+<title>Facebook</title></svg>
+  
+      </a>
+          <a  class="flex flex-col  text-green hover:text-green-dark transition" href="http://www.linkedin.com/shareArticle?mini=true&amp;url=https://www.pagerduty.com/resources/devops/learn/what-is-mttr/&amp;title=What%20is%20MTTR%3F&amp;summary=&amp;source=PagerDuty"
+          onclick="javascript:window.open(this.href,'', 'menubar=no,toolbar=no,resizable=yes,scrollbars=yes,height=600,width=600');return false;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 447.98" width="25"><g id="uuid-d2409c1b-2dee-4d1f-8709-49aa5d8499fb"><path d="M100.28,447.98H7.4V148.88h92.88v299.1ZM53.79,108.08C24.09,108.08,0,83.48,0,53.78,0,24.07,24.09,0,53.8,0c29.7,0,53.78,24.08,53.78,53.78,0,29.7-24.1,54.3-53.79,54.3ZM447.9,447.98h-92.68v-145.6c0-34.7-.7-79.2-48.29-79.2s-55.69,37.7-55.69,76.7v148.1h-92.78V148.88h89.08v40.8h1.3c12.4-23.5,42.69-48.3,87.88-48.3,94,0,111.28,61.9,111.28,142.3v164.3h-.1Z" fill="currentColor" stroke-width="0"/></g><title>LinkedIn</title></svg>
+  
+      </a>
+      </div>
+
+
+          </div>
+        </div>
+      </div>
+
+            <aside class="col-span-full sm:col-span-2 md:col-span-1 flex flex-col gap-8">
+          
+  <div class="flex flex-col justify-center gap-4">
+      
+  
+  
+        
+                          
+      
+            
+            
+    
+  
+      <a
+        class="hover:no-underline font-normal  cta justify-center items-center align-middle transition-all duration-200  text-center disabled:opacity-50 disabled:bg-transparent border-2 hover:disabled:bg-transparent 
+          rounded text-green disabled:text-green dark:text-white dark:disabled:text-white dark:hover:text-gray-xdark text-green hover:text-white hover:bg-green dark:hover:bg-white border-green border-solid dark:border-white hover:border-green hover:disabled:border-green  inline-flex rounded text-base px-glg-lg py-gmd-base "
+
+        
+                                        href="/demo/?type=blog"
+                                                  target="_self"
+                  
+                  data-track-event="Button Clicked" data-track-props="&#x7B;&quot;text&quot;&#x3A;&quot;Watch&#x20;demo&quot;,&quot;variant&quot;&#x3A;&quot;stroke&quot;,&quot;size&quot;&#x3A;&quot;default&quot;,&quot;bgColor&quot;&#x3A;&quot;default&quot;,&quot;primary&quot;&#x3A;true,&quot;iconDir&quot;&#x3A;&quot;none&quot;,&quot;shape&quot;&#x3A;&quot;default&quot;,&quot;disabled&quot;&#x3A;false,&quot;fullWidth&quot;&#x3A;false,&quot;video&quot;&#x3A;null,&quot;attributes&quot;&#x3A;&#x7B;&quot;href&quot;&#x3A;&quot;&#x5C;&#x2F;demo&#x5C;&#x2F;&#x3F;type&#x3D;blog&quot;,&quot;target&quot;&#x3A;&quot;_self&quot;&#x7D;,&quot;iconName&quot;&#x3A;&quot;&quot;&#x7D;"
+        
+                >
+        
+          
+          Watch demo          
+          
+        
+      </a>
+
+  
+  </div>
+      <div class="flex flex-col justify-center gap-4 ">
+      
+  
+  
+        
+                          
+      
+            
+            
+    
+  
+      <a
+        class="hover:no-underline font-normal  cta justify-center items-center align-middle transition-all duration-200  text-center disabled:opacity-50 border-2 text-white disabled:text-white bg-green 
+          disabled:bg-green hover:bg-green-dark border-green border-solid hover:border-green-dark hover:disabled:border-green   inline-flex rounded text-base px-glg-lg py-gmd-base "
+
+        
+                                        href="/contact-us/"
+                                                  target="_self"
+                  
+                  data-track-event="Button Clicked" data-track-props="&#x7B;&quot;text&quot;&#x3A;&quot;Contact&#x20;Us&quot;,&quot;variant&quot;&#x3A;&quot;fill&quot;,&quot;size&quot;&#x3A;&quot;default&quot;,&quot;bgColor&quot;&#x3A;&quot;default&quot;,&quot;primary&quot;&#x3A;true,&quot;iconDir&quot;&#x3A;&quot;none&quot;,&quot;shape&quot;&#x3A;&quot;default&quot;,&quot;disabled&quot;&#x3A;false,&quot;fullWidth&quot;&#x3A;false,&quot;video&quot;&#x3A;null,&quot;attributes&quot;&#x3A;&#x7B;&quot;href&quot;&#x3A;&quot;&#x5C;&#x2F;contact-us&#x5C;&#x2F;&quot;,&quot;target&quot;&#x3A;&quot;_self&quot;&#x7D;,&quot;iconName&quot;&#x3A;&quot;&quot;&#x7D;"
+        
+                >
+        
+          
+          Contact Us          
+          
+        
+      </a>
+
+  
+  </div>
+
+
+                          <div class="flex flex-col gap-4">
+    <h3 class="text-md">Additional Resources</h3>
+    <div class="flex flex-col">
+                      
+  
+  
+          
+  <a href="https://www.pagerduty.com/resources/ai/ebook/firefighting-to-autonomous-operations-roadmap/" class="overflow-visible
+                        group/button
+                        flex
+                        flex-col cursor-pointer max-w-72
+                        "
+      data-track-event="Card Clicked"
+      data-track-props="&#x7B;&quot;title&quot;&#x3A;&quot;From&#x20;Firefighting&#x20;to&#x20;Autonomous&#x20;Operations&#x3A;&#x20;How&#x20;AI&#x20;Startups&#x20;Scale&#x20;to&#x20;Enterprise&#x20;Reliability&quot;,&quot;assetType&quot;&#x3A;&quot;ebook&quot;,&quot;speakers&quot;&#x3A;false,&quot;attributes&quot;&#x3A;&#x7B;&quot;href&quot;&#x3A;&quot;https&#x3A;&#x5C;&#x2F;&#x5C;&#x2F;www.pagerduty.com&#x5C;&#x2F;resources&#x5C;&#x2F;ai&#x5C;&#x2F;ebook&#x5C;&#x2F;firefighting-to-autonomous-operations-roadmap&#x5C;&#x2F;&quot;&#x7D;&#x7D;"
+              target="_self"
+            >
+
+            <div class="flex flex-col
+       bg-green
+       max-w-72
+       aspect-square
+       rounded
+       shadow
+       mb-glg-base
+       p-4
+       gap-4
+       text-white
+       group-hover/button:shadow-lg">
+    <div class="flex-1 content-end mx-auto">
+      
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 206.46 142.89" height="80"><g><polygon points="173.78 0 172.78 0 172.78 27.34 206.45 27.34 206.45 26.87 173.78 0" fill="currentColor" stroke-width="0"/><path d="M167.78,0h-61.49v142.89h93.02c3.94,0,7.15-3.21,7.15-7.15V32.34h-38.67V0h0Z" fill="currentColor" stroke-width="0"/><path d="M93.89,0H7.15c-.28,0-.55.02-.81.05-.09,0-.18.03-.27.04-.18.03-.36.06-.54.1-.1.02-.2.05-.3.08-.17.05-.33.1-.5.16-.09.03-.18.06-.27.1-.21.09-.42.18-.62.29-.06.03-.12.06-.18.1-.19.11-.38.23-.56.35-.08.06-.16.12-.24.18-.13.1-.26.2-.38.31-.08.07-.16.14-.24.22-.12.11-.23.23-.34.35-.07.07-.14.15-.2.22-.14.17-.27.34-.4.52-.02.03-.05.06-.07.09,0,0-.02.03-.03.04-.16.24-.3.48-.43.74-.04.08-.08.15-.11.23-.12.27-.23.54-.32.82,0,.02,0,.04-.02.06-.09.29-.15.59-.21.89,0,.08-.03.16-.04.25-.04.31-.07.63-.07.96h0v128.59c0,3.94,3.21,7.15,7.15,7.15h93.02V0h-6.29.01Z" fill="currentColor" stroke-width="0"/></g></svg>
+  
+  
+
+    </div>
+
+    <label class="uppercase text-sm text-center resource-main-term">
+      ebook
+    </label>
+
+    <h2 class="flex-1 text-base text-center text-balance resource-title">From Firefighting to Autonomous Operations: How AI Startups Scale to Enterprise Reliability</h2>
+  </div>
+
+              </a>
+    
+                      
+  
+  
+          
+  <a href="https://www.pagerduty.com/resources/ai/infographics/disruption-tax-downtime-vs-ai-value/" class="overflow-visible
+                        group/button
+                        flex
+                        flex-col cursor-pointer max-w-72
+                        "
+      data-track-event="Card Clicked"
+      data-track-props="&#x7B;&quot;title&quot;&#x3A;&quot;The&#x20;Cost&#x20;of&#x20;Disruption&#x20;vs.&#x20;the&#x20;Value&#x20;of&#x20;AI-Powered&#x20;Operations&quot;,&quot;assetType&quot;&#x3A;&quot;infographics&quot;,&quot;speakers&quot;&#x3A;false,&quot;attributes&quot;&#x3A;&#x7B;&quot;href&quot;&#x3A;&quot;https&#x3A;&#x5C;&#x2F;&#x5C;&#x2F;www.pagerduty.com&#x5C;&#x2F;resources&#x5C;&#x2F;ai&#x5C;&#x2F;infographics&#x5C;&#x2F;disruption-tax-downtime-vs-ai-value&#x5C;&#x2F;&quot;&#x7D;&#x7D;"
+              target="_self"
+            >
+
+            <div class="flex flex-col
+       bg-green
+       max-w-72
+       aspect-square
+       rounded
+       shadow
+       mb-glg-base
+       p-4
+       gap-4
+       text-white
+       group-hover/button:shadow-lg">
+    <div class="flex-1 content-end mx-auto">
+      
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 107.32 142.89" height="80"><g><polygon points="74.65 0 73.64 0 73.64 27.34 107.32 27.34 107.32 26.87 74.65 0" fill="currentColor" stroke-width="0"/><path d="M68.64,0H7.15C3.21,0,0,3.21,0,7.15v128.59c0,3.94,3.21,7.15,7.15,7.15h93.02c3.94,0,7.15-3.21,7.15-7.15V32.34h-38.67V0h0ZM27.79,82.45h36.32v7H27.79v-7ZM82.65,113.74H27.79v-7h54.86v7ZM75.54,58.17v7H27.79v-7h47.75Z" fill="currentColor" stroke-width="0"/></g></svg>
+  
+  
+
+    </div>
+
+    <label class="uppercase text-sm text-center resource-main-term">
+      infographics
+    </label>
+
+    <h2 class="flex-1 text-base text-center text-balance resource-title">The Cost of Disruption vs. the Value of AI-Powered Operations</h2>
+  </div>
+
+              </a>
+    
+          </div>
+  </div>
+
+        
+                            
+  <div class="flex flex-col gap-4">
+    <h3 class="text-md">Recent Blog Posts</h3>
+    <div class="flex flex-col gap-4">
+              <a href="https://www.pagerduty.com/blog/ai/mcp-server-intelligent-tools/" class="group flex gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0 mt-1 text-green group-hover:text-green-dark transition"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+  
+          <span class="text-green group-hover:text-green-dark transition flex-shrink">Investigate Smarter from Any Agent: Blast Radius and AI Post-Incident Reviews Come to the PagerDuty MCP Server</span>
+        </a>
+              <a href="https://www.pagerduty.com/blog/ai/senior-engineering-problem/" class="group flex gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0 mt-1 text-green group-hover:text-green-dark transition"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+  
+          <span class="text-green group-hover:text-green-dark transition flex-shrink">The AI Economy Has a Senior Engineer Problem. Here&#8217;s How to Solve It</span>
+        </a>
+              <a href="https://www.pagerduty.com/blog/announcements/see-it-approve-it-revoke-it-scoped-oauth-for-public-apps/" class="group flex gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0 mt-1 text-green group-hover:text-green-dark transition"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+  
+          <span class="text-green group-hover:text-green-dark transition flex-shrink">See It, Approve It, Revoke It: Scoped OAuth for Public Apps</span>
+        </a>
+          </div>
+  </div>
+
+              </aside>
+    </div>
+  </section>
+
+    </main>
+
+                  
+
+<footer
+  id="main-footer"
+  cp-key="main-footer"
+>
+  <nav
+    id="footer-columns"
+    cp-key="main-footer-columns"
+    cp-set="container"
+  >
+          <section
+        id="footer-platform"
+        cp-key="main-footer-column"
+      >
+        <h2
+          cp-key="column-heading"
+          cp-set="heading"
+        >Platform</h2>
+                  <a
+            href="https://www.pagerduty.com/platform/incident-management/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Incident Management
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/platform/aiops/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            AIOps
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/platform/automation/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Automation
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/platform/business-ops/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Business Operations
+                      </a>
+                  <a
+            href="https://developer.pagerduty.com/"
+            hreflang="en"
+            rel="noopener"
+             target="_blank"             cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Developer Platform
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/enterprise/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Enterprise-Class Platform
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/digital-operations-management/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Digital Operations Management
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/platform/generative-ai/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Generative AI
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/whats-new/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            What's New
+                      </a>
+              </section>
+          <section
+        id="footer-solutions"
+        cp-key="main-footer-column"
+      >
+        <h2
+          cp-key="column-heading"
+          cp-set="heading"
+        >Solutions</h2>
+                  <a
+            href="https://www.pagerduty.com/solutions/incident-management-transformation/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Incident Management Transformation
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/solutions/operations-center-modernization/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Operations Center Modernization
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/solutions/automation-coe/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Automation Standardization
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/solutions/cx-operations/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Customer Experience Operations
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/solutions/digital-resilience/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Digital Operations Resiliency
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/solutions/scaled-service-ownership/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Scaled Service Ownership
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/solutions/remote-location-operations-automation/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Remote-Location Operations
+                      </a>
+              </section>
+          <section
+        id="footer-resources"
+        cp-key="main-footer-column"
+      >
+        <h2
+          cp-key="column-heading"
+          cp-set="heading"
+        >Resources</h2>
+                  <a
+            href="https://www.pagerduty.com/resources/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Resources Library
+                      </a>
+                  <a
+            href="https://community.pagerduty.com"
+            hreflang="en"
+            rel="noopener"
+             target="_blank"             cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Community Forum
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/on-tour/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            PagerDuty On Tour
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/customers/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Customer Stories
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/integrations/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Integration Guides
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/prompt-library/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Automation Library
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/blog/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Blog
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/demo/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Watch Demo
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/request-a-demo/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Request a Demo
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/use-cases/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Use Cases
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/events/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Events
+                      </a>
+              </section>
+          <section
+        id="footer-company"
+        cp-key="main-footer-column"
+      >
+        <h2
+          cp-key="column-heading"
+          cp-set="heading"
+        >Company</h2>
+                  <a
+            href="https://www.pagerduty.com/company/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            About PagerDuty
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/in-perspective/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Thought Leadership
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/newsroom/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Newsroom
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/events/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Events
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/foundation/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            PagerDuty.org
+                      </a>
+                  <a
+            href="https://investor.pagerduty.com/"
+            hreflang="en"
+            rel="noopener"
+             target="_blank"             cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Investor Relations
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/leadership/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Leadership
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/pagerduty-supplier-hub/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Suppliers
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/careers/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Careers
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/company/awards/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Awards
+                      </a>
+              </section>
+          <section
+        id="footer-support"
+        cp-key="main-footer-column"
+      >
+        <h2
+          cp-key="column-heading"
+          cp-set="heading"
+        >Support</h2>
+                  <a
+            href="https://status.pagerduty.com/"
+            hreflang="en"
+            rel="noopener"
+             target="_blank"             cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            System Status
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/support/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Help & Support
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/partner-with-pagerduty/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Partner with PagerDuty
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/contact-us/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Contact Us
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/legal/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Legal
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/services/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Services
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/faq/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            FAQs
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/accessibility-statement/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Accessibility
+                      </a>
+                  <a
+            href="https://www.pagerduty.com/ops-guides/"
+            hreflang="en"
+            rel=""
+                        cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Ops Guides
+                      </a>
+                  <a
+            href="https://university.pagerduty.com"
+            hreflang="en"
+            rel="noopener"
+             target="_blank"             cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            PagerDuty University
+                      </a>
+                  <a
+            href="https://support.pagerduty.com"
+            hreflang="en"
+            rel="noopener"
+             target="_blank"             cp-key="column-link"
+            cp-set="link-primary link-column"
+          >
+            Knowledge Base
+                      </a>
+              </section>
+      </nav>
+
+  <article
+    cp-key="main-footer-misc"
+    cp-set="container"
+  >
+    <user-prefs>
+              <footer-lang-select id="footer-lang-select">
+          <select
+            id="lang-selector"
+            name="lang-switcher"
+            cp-key="lang-selector"
+          >
+            <option disabled selected>
+              Change language
+            </option>
+            <option value="en">
+              English
+            </option>
+            <option value="fr">
+              Française
+            </option>
+            <option value="de">
+              Deutsche
+            </option>
+            <option value="ja">
+              日本語
+            </option>
+          </select>
+        </footer-lang-select>
+      
+      <color-scheme-select>
+                                      
+                </color-scheme-select>
+    </user-prefs>
+
+    <p
+      id="footer-social"
+      cp-key="footer-social"
+    >
+                        <a
+            href="https://www.facebook.com/PagerDuty/"
+            hreflang="en"
+            target="_blank"
+            rel="noopener"
+            cp-key="social-link"
+            cp-set="link-primary"
+            css-key="facebook-link"
+          >
+            <svg height="24" width="21" viewbox="-96 0 512 512">
+  <title>Facebook</title>
+  <path d="M279.14 288l14.22-92.66h-88.91v-60.13c0-25.35 12.42-50.06 52.24-50.06h40.42V6.26S260.43 0 225.36 0c-73.22 0-121.08 44.38-121.08 124.72v70.62H22.89V288h81.39v224h100.17V288z"
+        fill="currentColor"/>
+</svg>
+
+          </a>
+                  <a
+            href="https://x.com/pagerduty"
+            hreflang="en"
+            target="_blank"
+            rel="noopener"
+            cp-key="social-link"
+            cp-set="link-primary"
+            css-key="x-link"
+          >
+              <svg height="24" width="19" viewBox="0 0 31.64 28.6"><g>
+    <title>X</title><path fill="currentColor" d="M24.91,0h4.85l-10.6,12.11,12.47,16.48h-9.76l-7.65-10-8.75,10H.62l11.34-12.96L0,0h10.01l6.91,9.14L24.91,0ZM23.21,25.69h2.69L8.55,2.75h-2.88l17.55,22.94Z" stroke-width="0"/></g>
+  </svg>
+
+          </a>
+                  <a
+            href="https://www.instagram.com/pagerduty/"
+            hreflang="en"
+            target="_blank"
+            rel="noopener"
+            cp-key="social-link"
+            cp-set="link-primary"
+            css-key="instagram-link"
+          >
+            <svg height="24" viewbox="0 0 448 512">
+  <title>Instagram</title>
+  <path d="M224.1 141c-63.6 0-114.9 51.3-114.9 114.9s51.3 114.9 114.9 114.9S339 319.5 339 255.9 287.7 141 224.1 141zm0 189.6c-41.1 0-74.7-33.5-74.7-74.7s33.5-74.7 74.7-74.7 74.7 33.5 74.7 74.7-33.6 74.7-74.7 74.7zm146.4-194.3c0 14.9-12 26.8-26.8 26.8-14.9 0-26.8-12-26.8-26.8s12-26.8 26.8-26.8 26.8 12 26.8 26.8zm76.1 27.2c-1.7-35.9-9.9-67.7-36.2-93.9-26.2-26.2-58-34.4-93.9-36.2-37-2.1-147.9-2.1-184.9 0-35.8 1.7-67.6 9.9-93.9 36.1s-34.4 58-36.2 93.9c-2.1 37-2.1 147.9 0 184.9 1.7 35.9 9.9 67.7 36.2 93.9s58 34.4 93.9 36.2c37 2.1 147.9 2.1 184.9 0 35.9-1.7 67.7-9.9 93.9-36.2 26.2-26.2 34.4-58 36.2-93.9 2.1-37 2.1-147.8 0-184.8zM398.8 388c-7.8 19.6-22.9 34.7-42.6 42.6-29.5 11.7-99.5 9-132.1 9s-102.7 2.6-132.1-9c-19.6-7.8-34.7-22.9-42.6-42.6-11.7-29.5-9-99.5-9-132.1s-2.6-102.7 9-132.1c7.8-19.6 22.9-34.7 42.6-42.6 29.5-11.7 99.5-9 132.1-9s102.7-2.6 132.1 9c19.6 7.8 34.7 22.9 42.6 42.6 11.7 29.5 9 99.5 9 132.1s2.7 102.7-9 132.1z"
+        fill="currentColor"/>
+</svg>
+
+          </a>
+                  <a
+            href="https://www.linkedin.com/company/pagerduty"
+            hreflang="en"
+            target="_blank"
+            rel="noopener"
+            cp-key="social-link"
+            cp-set="link-primary"
+            css-key="linkedin-link"
+          >
+            <svg height="24" viewbox="0 0 448 512">
+  <title>LinkedIn</title>
+  <path d="M100.28 448H7.4V148.9h92.88zM53.79 108.1C24.09 108.1 0 83.5 0 53.8a53.79 53.79 0 0 1 107.58 0c0 29.7-24.1 54.3-53.79 54.3zM447.9 448h-92.68V302.4c0-34.7-.7-79.2-48.29-79.2-48.29 0-55.69 37.7-55.69 76.7V448h-92.78V148.9h89.08v40.8h1.3c12.4-23.5 42.69-48.3 87.88-48.3 94 0 111.28 61.9 111.28 142.3V448z"
+        fill="currentColor"/>
+</svg>
+
+          </a>
+                  </p>
+
+    <p cp-key="footer-copyright">
+      © 2026 PagerDuty, Inc. All rights reserved.
+    </p>
+  </article>
+
+  <nav
+    cp-key="main-footer-legal"
+    cp-set="container"
+  >
+                      <a
+          class=""
+                      href="https://www.pagerduty.com/privacy-policy/"
+                    cp-key="legal-link"
+          cp-set="link-primary link-column"
+        >
+          Privacy policy
+        </a>
+                        <a
+          class=""
+                      href="https://www.pagerduty.com/website-terms-of-use/"
+                    cp-key="legal-link"
+          cp-set="link-primary link-column"
+        >
+          Website Terms of Use
+        </a>
+                        <a
+          class=""
+                      href="https://www.pagerduty.com/privacy-policy/#ccpa"
+                    cp-key="legal-link"
+          cp-set="link-primary link-column"
+        >
+          California Privacy Notice
+        </a>
+                        <a
+          class=""
+                      href="https://www.pagerduty.com/assets/uk-modern-slavery-act-statement.pdf"
+                    cp-key="legal-link"
+          cp-set="link-primary link-column"
+        >
+          Modern Slavery Act
+        </a>
+                        <a
+          class=""
+                      href="https://www.pagerduty.com/ccpa/"
+                    cp-key="legal-link"
+          cp-set="link-primary link-column"
+        >
+          CCPA
+        </a>
+                        <a
+          class=" ot-sdk-show-settings"
+                    cp-key="legal-link"
+          cp-set="link-primary link-column"
+        >
+          Cookie Settings
+        </a>
+            </nav>
+</footer>
+<script type="speculationrules">
+{"prefetch":[{"source":"document","where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":["/wp-*.php","/wp-admin/*","/wp-content/uploads/*","/wp-content/*","/wp-content/plugins/*","/wp-content/themes/citizens-band/*","/*\\?(.+)"]}},{"not":{"selector_matches":"a[rel~=\"nofollow\"]"}},{"not":{"selector_matches":".no-prefetch, .no-prefetch a"}}]},"eagerness":"conservative"}]}
+</script>
+
+          
+  </body>
+</html>

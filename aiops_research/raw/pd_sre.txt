@@ -1,0 +1,542 @@
+ SRE Agent 
+ For AI agents: visit https://support.pagerduty.com/main/llms.txt for an index of all pages formatted in Markdown and endpoints in OpenAPI. Append .md to any documentation page URL to get its markdown version.
+ Jump to Content 
+ Knowledge Base Platform Release Notes Workflow Actions Default Japanese API Docs Integrations PagerDuty University PagerDuty Commons Contact Support My Support Tickets 
+ Knowledge Base
+ API Docs Integrations PagerDuty University PagerDuty Commons Contact Support My Support Tickets 
+ Default 
+ Knowledge Base Platform Release Notes Workflow Actions 
+ SRE Agent 
+ Getting Started
+ Introduction 
+ Trial Account Onboarding 
+ Log In to PagerDuty 
+ Navigate the Incidents Page 
+ Integrate PagerDuty With ITSM Tools 
+ Best Practice Ops Guides 
+ Incidents
+ Incidents Edit Incidents 
+ Reassign Incidents 
+ Reopen Incidents 
+ Incident Priority 
+ Incident Roles 
+ Incident Tasks 
+ Incident Types 
+ Custom Fields on Incidents 
+ Why Incidents Fail to Trigger 
+ Conference Bridge 
+ Add Responders 
+ Renotify a Responder 
+ Dynamic Notifications 
+ Communicate with Stakeholders 
+ Status Update Templates 
+ Event Management 
+ Required Fields on Resolve 
+ Quick Declare 
+ Alerts Alerts Table 
+ Jeli Post-Incident Reviews and Postmortems 
+ Visibility Console 
+ Notifications
+ Notification Content and Behavior Push Notifications 
+ Email Notifications 
+ Phone Notifications Phone Notification Disclosures 
+ SMS Notifications SMS Notification Disclosures 
+ WhatsApp Notifications WhatsApp Notification Disclosures 
+ Notification Troubleshooting Expected Notification Behavior 
+ Push Notification Troubleshooting 
+ Email Notification Troubleshooting 
+ Phone Notification Troubleshooting 
+ SMS Notification Troubleshooting 
+ Supported Countries 
+ Notification Phone Numbers 
+ Services
+ Services and Integrations Service Directory 
+ Service Profile 
+ Custom Fields on Services 
+ Business Services Business Service Subscription 
+ Service Dependencies 
+ Service Graph 
+ Maintenance Windows 
+ Regular Expressions 
+ Default Mobilization Service 
+ Configurable Service Settings 
+ People
+ Manage Users SCIM User Provisioning Microsoft Entra ID 
+ Okta 
+ OneLogin 
+ Import Users from a CSV 
+ Offboarding 
+ Session Timeouts 
+ User Roles 
+ Advanced Permissions 
+ User Profile My Profile 
+ Contact Information 
+ Notification Rules 
+ User Settings 
+ Teams 
+ Contextual Search - Tagging 
+ Shift-Based Schedules Edit Schedules 
+ Schedule Basics (Legacy) Edit Schedules 
+ Schedule Examples 
+ Schedules in Third-Party Apps 
+ Google Calendar Extension 
+ My On-Call Shifts 
+ Escalation Policy Basics Round Robin Scheduling 
+ Escalation Policies and Schedules 
+ Automation
+ PagerDuty Automation Actions PagerDuty Automation Trial 
+ Incident Workflows Workflow Integrations 
+ Workflow Actions 
+ PagerDuty Workflow Automation 
+ PagerDuty Runbook Automation 
+ AI
+ PagerDuty Advance PagerDuty Advance User Guide 
+ Scribe Agent 
+ Shift Agent 
+ Insights Agent 
+ SRE Agent Connectors, Tools, and Skills 
+ PagerDuty MCP Server 
+ AIOps
+ PagerDuty AIOps PagerDuty AIOps Quickstart Guide 
+ Alert Suppression 
+ Past Incidents 
+ Related Incidents 
+ Outlier Incident 
+ Probable Origin 
+ Recent Changes 
+ Event Orchestration Cache Variables 
+ Examples of Event Orchestration 
+ Recombining Rules 
+ AI Orchestrations 
+ Pricing Tiers 
+ Operations Console 
+ Noise Reduction Alert Grouping Global Alert Grouping 
+ Intelligent Alert Grouping 
+ Preview Intelligent Alert Grouping 
+ Content-Based Alert Grouping 
+ Unified Alert Grouping 
+ Time-Based Alert Grouping 
+ Auto-Pause Incident Notifications 
+ Legacy Event Intelligence 
+ Rulesets Rulesets Advanced Configuration 
+ Rulesets FAQ 
+ Rulesets Troubleshooting 
+ Migrate to Event Orchestration 
+ Analytics
+ Analytics Dashboard 
+ Insights Incident Activity Insights 
+ Service Performance Insights 
+ Responder Insights 
+ Team Insights 
+ Escalation Policy Insights 
+ Business Impact Insights 
+ Insights Filters 
+ Operational Reviews 
+ On-Call Readiness Reports 
+ Event Analytics 
+ PagerDuty Advance Analytics 
+ User Onboarding Report 
+ Recommendations 
+ Audit Trail Reporting 
+ PagerDuty Analytics Slack Integration 
+ Operational Maturity 
+ Integrations
+ Amazon CloudWatch Integration Guide | PagerDuty 
+ Amazon EventBridge Integration Guide | PagerDuty 
+ Amazon GuardDuty Integration Guide | PagerDuty 
+ AWS CloudTrail Integration Guide | PagerDuty 
+ AWS Health Dashboard Integration Guide | PagerDuty 
+ AWS Security Hub Integration Guide | PagerDuty 
+ Backstage Plugin Guide | PagerDuty 
+ Bitbucket Integration Guide | PagerDuty 
+ Datadog Apps Integration Guide | PagerDuty 
+ Email Integration Guide | PagerDuty Email Management: Filters and Rules 
+ Email Integration Troubleshooting Guide 
+ GitHub Changes Integration Guide | PagerDuty 
+ GitLab Changes Integration Guide | PagerDuty 
+ Google Workspace Integration Guide 
+ Jenkins Changes Integration Guide | PagerDuty 
+ Jira Cloud Integration Guide | PagerDuty Jira Cloud User Guide 
+ Jira Cloud Integration FAQ 
+ Jira Cloud Troubleshooting Guide 
+ Jira Server Integration Guide | PagerDuty Jira Server Incident Workflow Action User Guide 
+ Jira Server Troubleshooting Guide 
+ Microsoft Teams Integration Guide | PagerDuty Microsoft Teams User Guide 
+ Microsoft Teams Permission Changelog 
+ Salesforce Service Cloud Integration Guide | PagerDuty Salesforce Service Cloud User Guide 
+ Salesforce Custom Field Mappings 
+ ServiceNow Integration Guide | PagerDuty ServiceNow Integration Details 
+ ServiceNow User Guide 
+ ServiceNow Provisioning 
+ Advanced ServiceNow Configuration Sync Incident Types with ServiceNow 
+ ServiceNow Custom Field Mappings 
+ Sync Service Reassignment with ServiceNow 
+ ServiceNow OAuth Authentication 
+ ServiceNow Change Requests Integration Guide 
+ ServiceNow Troubleshooting Guide 
+ Upgrading to OpsCloud: Resolving Provisioning Failures 
+ ServiceNow CSM Integration Guide ServiceNow CSM User Guide 
+ Slack Integration Guide | PagerDuty Slack User Guide 
+ Slack Permission Changelog 
+ Zendesk Integration Guide | PagerDuty Zendesk User Guide 
+ Zendesk Custom Field Mappings 
+ Zoom Integration Guide | PagerDuty 
+ Nagios Troubleshooting Guide 
+ PagerDuty Agent Integration Guide PagerDuty Agent Troubleshooting Guide 
+ SolarWinds Orion Troubleshooting Guide 
+ Zabbix Troubleshooting Guide 
+ Extensions 
+ Add-ons 
+ Webhooks 
+ Custom Incident Actions 
+ Single Sign-On (SSO) 
+ Live Call Routing 
+ Apps Scoped OAuth Apps 
+ APIs
+ APIs Overview 
+ API Access Keys REST API Rate Limits 
+ Developer Documentation 
+ API Client Libraries 
+ Safelist IPs IP Allow List for User Sessions 
+ Third-Party Tools API Tools & Code Samples 
+ Status
+ Status Pages Overview 
+ Internal Status Page 
+ External Status Page Private Status Page 
+ Billing and Account Settings
+ Billing, Invoices and Payments Form W-9 
+ Vendor Form 
+ Cancel Your Account 
+ Account Settings 
+ Account Subdomains 
+ Time Zone Settings 
+ Mobile App
+ Training Material 
+ PagerDuty Mobile App Mobile Home Screen 
+ Mobile Widgets 
+ Mobile App Settings 
+ Use Mobile Schedules 
+ Mobile Status Dashboard Home Screen Status Dashboard 
+ MDM Setup and Supported Web Browsers Intune Support for Mobile App Management 
+ Mobile Release Notes Mobile Release Notes (Archive) 
+ Platform
+ What's New in PagerDuty 
+ Platform Release Notes (Archive) 
+ System Requirements 
+ Common Event Format (PD-CEF) 
+ Search 
+ PagerDuty Outage Notifications 
+ Service Regions 
+ Post-Incident Reviews
+ Post-Incident Reviews 
+ Get Started with Jeli Post-Incident Reviews Configure Post-Incident Reviews (Jeli) 
+ Jeli System Requirements 
+ Jeli Post-Incident Reviews Basic Post-Incident Review Tutorial 
+ Post-Incident Review Stages 
+ Post-Incident Review Report Post-Incident Review Templates 
+ Post-Incident Review Tags 
+ Related Post-Incident Reviews 
+ Narrative Builder 
+ Narrative Builder Tutorial 
+ View Review Participant Data 
+ Collect Action Items 
+ Post-Incident Review Notes 
+ Jeli Learning Center 
+ View People in Jeli 
+ Jeli Settings and Integrations PagerDuty Integration | Jeli 
+ Zoom Integration | Jeli 
+ Jira Integration | Jeli 
+ Import HR Data 
+ Jeli API 
+ Jeli Legacy Get Started With Jeli Legacy 
+ Jeli Incidents (Legacy) Jeli Slackbot Commands (Legacy) 
+ Mitigate a Jeli Incident (Legacy) 
+ Jeli Workflows (Legacy) 
+ Jeli Opportunities (Legacy) Opportunity Events (Legacy) 
+ Jeli Learning Center (Legacy) 
+ View People in Jeli (Legacy) 
+ Jeli Settings and Integrations (Legacy) Entra ID Integration | Jeli (Legacy) 
+ Google Meet Integration | Jeli (Legacy) 
+ Jira Integration | Jeli (Legacy) 
+ Nobl9 Integration | Jeli (Legacy) 
+ Okta Integration | Jeli (Legacy) 
+ Opsgenie Integration | Jeli (Legacy) 
+ PagerDuty Integration | Jeli (Legacy) 
+ ServiceNow Integration | Jeli (Legacy) 
+ Slack Integration | Jeli (Legacy) 
+ Statuspage Integration | Jeli (Legacy) 
+ Vanta Integration | Jeli (Legacy) 
+ Zoom Integration | Jeli (Legacy) 
+ Import HR Data (Legacy) 
+ Jeli API (Legacy) 
+ Security
+ PagerDuty and CISA 0-Day Vulnerability Remediation Timelines 
+ PagerDuty Log4j Zero-Day Vulnerability Updates 
+ PagerDuty Runbook Automation Self-Hosted / Rundeck Key Pair Misconfiguration 
+ Security Hygiene for the Current Cyber Threat Landscape 
+ Sisense Compromise 
+ Security, Privacy, and Compliance 
+ Support
+ Support Portal FAQ 
+ SRE Agent
+ A continuously learning agent to help rapidly diagnose, troubleshoot, and remediate issues
+ 📘 
+ Availability
+ To access the SRE Agent within the Operations Console , you must have AIOps and PagerDuty Advance . To access the SRE Agent in Slack or the incident details page , you must have PagerDuty Advance .
+ PagerDuty Advance is available through one-time AI Actions or as an add-on with the following pricing plans:
+ Enterprise
+ Business
+ Professional
+ Contact our Sales Team to upgrade to a pricing plan with PagerDuty Advance or AIOps. If you do not currently have PagerDuty Advance or AIOps, PagerDuty begins a trial to give you access to the SRE Agent.
+ 🚧 
+ PagerDuty Advance Disclosure
+ Read our PagerDuty Advance AI Disclosure for more information about how PagerDuty designed, built, and assessed PagerDuty Advance with mission-critical work in mind.
+ Overview
+ When an incident fires, responders often spend the first critical minutes doing the same repetitive work: hunting down the right runbook, pulling logs from multiple tools, piecing together whether this has happened before. The SRE Agent works alongside you to handle that toil automatically — ingesting event data, runbooks, and logs to build an understanding of the incident's scope and likely cause, then recommending remediation actions so your team can focus on resolution.
+ Every incident the SRE Agent participates in contributes to its memory, so investigations get faster and more accurate over time.
+ Key Features
+ Ingest and analyze your runbooks, SOPs, and diagnostics (for example, error logs)
+ Generate and save playbooks for recurring issues
+ Prioritize actions by urgency and impact
+ Surface likely root causes from available data
+ Recommend diagnostic and remediation steps
+ Detect patterns; recall similar incidents and past resolutions
+ Provide structured troubleshooting for incidents, services, and infrastructure
+ Organize context into actionable views with interactive nudges and buttons
+ Summarize conversations and inputs, mark resolved, and save learnings
+ 📘 
+ PagerDuty Advance AI Actions
+ Accounts with PagerDuty Advance have an allotment of AI Actions at their disposal. The SRE Agent uses four AI Actions whenever you:
+ Submit a request to the SRE Agent via Slack or the Operations Console (for example, "what are my past incidents," "what is the likely root cause").
+ Click a nudge button (for example, Update a Runbook , Analyze Past Incidents ).
+ Refer to How many AI Actions does each action cost for more information.
+ Use SRE Agent
+ After configuring PagerDuty Advance , you can access the SRE Agent through either:
+ The Operations Console 
+ The Incident Details Page 
+ Slack 
+ MS Teams (Currently in Early Access) 
+ 📘 
+ SRE Agent Virtual Responder
+ Currently in Early Access, you can deploy the SRE Agent as a virtual responder so it begins investigating the moment an incident triggers. Configure it in one of two ways:
+ Trigger via Incident Workflow — deploy the SRE Agent as a virtual responder in either Slack or the PagerDuty web app.
+ Trigger via Escalation Policy — add the SRE Agent to an escalation level so it investigates in parallel with your on-call responders.
+ In the Operations Console
+ In the PagerDuty web app, navigate to AIOps Operations Console .
+ Optional: To add the SRE Agent column to the Operations Console as a default column for faster incident triage:
+ SRE Agent Column in the Operations Console
+ Click the incident Title .
+ Select the SRE Agent tab and wait for the agent to load the incident summary and suggest next steps.
+ Ask questions and provide information to begin troubleshooting the incident with the agent. Refer to Example Questions for examples.
+ Click the SRE Agent nudges or buttons to take prescribed actions during the conversation (for example, Upload a service runbook ).
+ Add an attachment to upload additional files.
+ In Incident Details
+ In the PagerDuty web app, navigate to an open incident.
+ On the right side of the incident details page, select the SRE Agent tab and wait for the agent to load the incident summary and suggest next steps.
+ Ask questions and provide information to begin troubleshooting the incident with the agent. Refer to Example Questions for examples.
+ Click the SRE Agent nudges or buttons to take prescribed actions during the conversation (for example, Upload a service runbook ).
+ Add an attachment to upload additional files.
+ In Slack
+ 📘 
+ Before You Begin
+ You must configure Slack with the SRE Agent. Refer to our instructions to Configure the Slack Integration and Connect PagerDuty Advance to Slack if you have not already done so.
+ 📘 
+ Note
+ If you do not have PagerDuty AIOps, you can still access certain PagerDuty AIOps information, such as related incidents, past incidents, change events, and outlier incidents, but only within the Slack chat interface. This information is not available outside of the agent chat interface in Slack (for example, in the incident management web app).
+ 🚧 
+ Required Scopes
+ The SRE Agent requires additional scopes to work with Slack. A PagerDuty admin may need to reauthorize the Slack integration to grant these scopes.
+ Access the SRE Agent in one of the following channel types:
+ Dedicated incident channels
+ Team-based or service-based Slack channels
+ To start the SRE Agent, perform one of the following actions:
+ Click the SRE Agent Triage button.
+ Ask questions in the chat using @pagerduty followed by a question related to the incident. Refer to Example Questions for examples.
+ To upload a file to the SRE Agent in Slack:
+ Click the Upload Runbook or Update Runbook button.
+ Follow the prompts and select the runbook to upload.
+ Click Submit .
+ Slack Interface with SRE Agent
+ In MS Teams
+ ⚠️ 
+ Before You Begin
+ The SRE Agent in MS Teams is currently in Early Access . You must configure MS Teams with PagerDuty Advance and have the SRE Agent enabled. Refer to our instructions on how to Connect PagerDuty Advance to MS Teams if you have not already done so.
+ Once configured, you can interact with the SRE Agent by typing @pagerduty followed by your question in the chat. Refer to Example Questions to get started.
+ Integrations
+ The SRE Agent can retrieve log data from observability platforms such as Grafana, Datadog, New Relic, and AWS CloudWatch, and runbooks from sources such as Confluence and GitHub. By analyzing these logs and runbooks, the SRE Agent guides responders through investigation, triage, and resolution.
+ Connectors and Tools are configured from AI AI Settings SRE Agent Configure Connectors. 
+ 📘 
+ Setting Up an Integration
+ For more information on setting up SRE Agent integrations, view Connectors, Tools, and Skills. .
+ Supported Actions
+ The SRE Agent uses nudges to recommend supported actions such as:
+ Upload Runbook : For first-time setup on a service.
+ Update Runbook : When a runbook already exists.
+ Analyze Past Incidents : Review history and patterns.
+ Analyze Related Incidents : Identify correlations and impact.
+ Generate a Playbook : Create repeatable response steps.
+ Check Change Events : Verify recent changes for possible cause.
+ Search Logs : Check logs based on tooling setup.
+ Update Memory : After incident resolution, save new information to SRE Agent memory.
+ Incident Notes
+ The SRE Agent analyzes new notes posted during active incidents, where you can see them in:
+ Slack : Posts analysis of new incident notes.
+ Operations Console : Posts each new note in chat with interpretation.
+ You can disable proactive note messages on the AI Settings page. You can ask questions in the chat about recent notes.
+ Example Questions
+ The following questions are representative of the types of questions the SRE Agent can answer. The SRE Agent leverages large language models where questions do not have to be provided in the exact text format shown below.
+ Example Question to SRE Agent Description 
+ Can you analyze past incidents to see how this was resolved before? Ability to see what similar incidents occurred previously for that service. 
+ Can you provide a list of related incidents? Ability to see what active incidents might be related on services that are not your service. 
+ How do I check [insert service, infrastructure information] for this specific error? Ability to ask questions related to the type of incident you are troubleshooting. 
+ What information should I gather for this incident to help troubleshoot? Ability to understand what type of information is needed to troubleshoot the incident. 
+ Should I do step X or step Y first to troubleshoot this incident? From the list of suggested next steps, the agent recommends which step to take first, with additional context on its reasoning. 
+ How urgent is this incident based on the data? Ability to understand incident urgency. 
+ What steps should I take to troubleshoot this issue? Suggested remediation steps. 
+ Can you generate a playbook for resolving this error? SRE Agent develops a playbook based on the agent's understanding of the incident. 
+ How do I check the logs for this specific error? Instructions for checking logs, which may include a sample query. 
+ How can I prevent this error from recurring? Suggestions on how to improve the incident for the future, such as service or infrastructure improvements. 
+ Is there a pattern to when these errors occur? Analysis of incident patterns. 
+ What is the impact of this error on our systems? Potential impact on other related services or infrastructure based on the incident context. 
+ What are some likely root causes for this incident? Suggested root-cause for the incident. 
+ SRE Agent Capabilities
+ Here is a look at the specific capabilities the SRE Agent uses to investigate and manage incidents:
+ get_incident_details - Look up incidents by ID or number (includes recent notes, changes, status updates).
+ list_incidents - Query incidents by service, team, user, or filters.
+ add_incident_note - Add a note to the current incident.
+ get_service_details - Retrieve service info by ID or name.
+ get_related_services - Get upstream and downstream service dependencies.
+ SRE Agent Memory Definitions
+ The SRE Agent maintains several types of memory to provide increasingly relevant and personalized assistance over time. All SRE Agent memory artifacts are scoped to a given PagerDuty service. Understanding these memory types in the following sections helps you leverage the full capabilities of the agent.
+ Memory API
+ To update or redact information, see the SRE Agent Memory API documentation . The SRE Agent Memory API provides visibility and control over the memory artifacts maintained by the SRE Agent for each PagerDuty service. The SRE Agent uses multiple types of memory to deliver increasingly personalized and context-aware assistance over time, helping teams resolve incidents faster and with greater accuracy.
+ With the Memory API, you can:
+ View all SRE Agent memory artifacts associated with a given service or incident.
+ Update or redact sensitive or outdated information to improve the accuracy and compliance of SRE Agent insights.
+ Leverage the API to make edits or redactions at human speed, not machine speed, ensuring timely, manual oversight where needed.
+ Enhance transparency into how the SRE Agent builds memories from operational data to deliver more relevant recommendations.
+ SRE Incident Playbook ("Scratchpad")
+ Continuously learns from your organization's historical incident data.
+ Automatically generates prioritized resolution steps tailored to your environment by analyzing patterns from past incidents.
+ Provides AI-powered baseline recommendations, even for novel incidents.
+ Delivers context-aware troubleshooting guidance that improves with each resolved incident.
+ Customer Service Runbook
+ Stores and references your runbooks, SOPs, and documentation (for example, Confluence or GitHub pages).
+ Remembers manually provided documentation for future conversations.
+ Recommends steps that align with your organization's established procedures and standards.
+ Incident Summarization
+ Automatically creates comprehensive summaries when incidents are marked complete.
+ Captures key learnings, resolution details, and troubleshooting paths without manual documentation effort.
+ Builds an ever-growing repository of institutional knowledge that benefits future incident response.
+ Service Profile
+ Metadata the SRE Agent has observed about a given service via customer runbook, event payload data, and user interactions.
+ Examples include cloud providers, region, service type, and relevant log search queries for a given service.
+ Recommended Workflows
+ The SRE Agent helps streamline incident response by analyzing configured incident workflows and recommending the most relevant options based on the real-time context of each incident. Click here for more information on recommended workflows.
+ Best Practices
+ Use these quick tips to get the most from the SRE Agent — share context fast, collaborate in triage, and improve outcomes over time.
+ Provide Relevant Documentation and Context
+ Upload any runbooks, SOPs, or knowledge base articles related to the affected service or architecture so everyone has the right context.
+ Resolve Incidents
+ The SRE Agent recalls key information observed during an incident including event payload information, key user interactions, log search queries, and other data that is useful for future similar incidents. Incidents must be resolved to prompt the SRE Agent to save information into the memory. If you interact with the SRE Agent post incident resolution, click the Update Memory button to prompt the SRE Agent to save additional information for future incidents.
+ Interact with the Agent
+ Treat the SRE Agent like a triage partner and ask questions when you encounter difficulties. Share any critical findings or remediation steps you have taken during the incident so the agent stays informed and learns over time.
+ Provide Performance Feedback
+ Report whether each suggested troubleshooting step was a success or a failure. If a step fails, inform the SRE Agent so the agent can suggest alternative actions and keep the triage moving forward.
+ Generate Incident Playbooks
+ At the end of each incident, request a summary playbook. Review it for accuracy and completeness, then copy the approved version to your knowledge base for future use.
+ Add Runbooks
+ Structure runbooks one per service with SOPs based on incident types or scenarios. Optionally include log queries to help the SRE Agent build better searches.
+ Know Product Limits
+ The SRE Agent analyzes custom_details and notes, but only up to the first 2,000 characters of each. Content beyond that limit is not included.
+ Rate AI Responses
+ Click the Rate AI Response button next to each suggestion or recommendation in the conversation. Provide feedback to help improve the product and future recommendations. Your input helps the system learn and deliver better assistance over time.
+ Rate AI Response Button
+ FAQ
+Expand/Collapse All
+ What incident data can the SRE Agent analyze? 
+ The SRE Agent analyzes:
+ Event and alert payload information
+ Historical and related incidents
+ Change events
+ User-provided data (runbooks, logs, documentation)
+ Current limitations : The SRE Agent has limited access to incident timeline details, incident workflows, and alert grouping data. These features will be added in future releases to enhance SRE Agent capabilities.
+ What happens if a recommendation or incident summary is not correct? 
+ Interact with the agent and state that the suggestion provided was not helpful, why it was not helpful, and ask for an alternative recommendation. You should also rate the response for the recommendation, which is analyzed to improve future recommendations.
+ What file types and limits exist for file upload? 
+ - PagerDuty currently supports .txt , .pdf , and .md files.
+ PagerDuty currently supports .jpg and .png for image analysis.
+ One conversation can contain up to a total of 25 files, with each file being 100 Kb maximum.
+ What ways can the SRE Agent fetch links? 
+ The SRE Agent automatically fetches runbook URLs from the event payload. You can also ask the agent to:
+ Fetch specific runbook links from Knowledge Base tools (including embedded links within pages)
+ Conduct log searches via nudge (button) or chat command
+ How does the SRE Agent save time? 
+ The SRE Agent transforms incident response by replacing manual, time-consuming investigation steps with automated, intelligent actions. Here is a comparison of your workflow before and after using the SRE Agent:
+ Manual Workflow (Before) SRE Agent Workflow (After) 
+ Hunting for Documentation : You search across multiple systems for the correct SOPs and runbooks. Runbook Integration : The agent ingests your existing SOPs, integrates with tools that link to runbooks, and automatically generates new runbooks. 
+ Manual Log Retrieval : You log into multiple third-party tools to manually search, view, and retrieve error logs and diagnostics. Automated Analysis : The agent integrates with third-party tools to automatically retrieve, ingest, and analyze diagnostics and error logs. 
+ Guessing Next Steps : You manually prioritize tasks and determine the necessary troubleshooting steps. Guided Remediation : The agent prioritizes actions by urgency and impact, recommends diagnostic and remediation steps, and provides structured troubleshooting for incidents, services, and infrastructure. 
+ Fragmented Context : You spend critical minutes piecing together context and searching for the root cause. Instant Context : The agent surfaces likely root causes from available data and organizes context into actionable views with interactive buttons and nudges. 
+ Relying on Human Memory : You try to remember if a similar incident happened in the past and how your team resolved it. Pattern Detection : The agent detects patterns and automatically recalls similar past incidents and their resolutions. 
+ Manual Wrap-Up : You spend time writing summaries, documenting recurring issues, and manually resolving the incident. Automated Wrap-Up : The agent summarizes conversations and inputs, marks the incident resolved, saves learnings, and generates and saves playbooks for recurring issues. 
+ Updated about 1 month ago 
+ Learn more
+ PagerDuty Advance 
+ Did this page help you? Yes 
+ No 
+ Copy Page 
+ Overview 
+ Key Features 
+ Use SRE Agent 
+ In the Operations Console 
+ In Incident Details 
+ In Slack 
+ In MS Teams 
+ Integrations 
+ Supported Actions 
+ Incident Notes 
+ Example Questions 
+ SRE Agent Capabilities 
+ SRE Agent Memory Definitions 
+ Memory API 
+ SRE Incident Playbook ("Scratchpad") 
+ Customer Service Runbook 
+ Incident Summarization 
+ Service Profile 
+ Recommended Workflows 
+ Best Practices 
+ Provide Relevant Documentation and Context 
+ Resolve Incidents 
+ Interact with the Agent 
+ Provide Performance Feedback 
+ Generate Incident Playbooks 
+ Add Runbooks 
+ Know Product Limits 
+ Rate AI Responses 
+ FAQ 
+ Getting Started
+ Intro to PagerDuty 
+ FAQ 
+ Best Practices 
+ Integration Guides 
+ Resources
+ What's New 
+ Developer Docs 
+ Incident Response Docs 
+ Engineering Blog 
+ Mobile App 
+ Support
+ Knowledge Base 
+ Community Forum 
+ Service Status 
+ Support Tickets 
+ Company
+ About PagerDuty 
+ Company Blog 
+ Security 
+ Terms and Conditions 
+ Privacy Policy 
+ Community Policy 
+ © PagerDuty, Inc. All rights reserved.
+ 

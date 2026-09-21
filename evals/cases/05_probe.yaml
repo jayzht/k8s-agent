@@ -1,0 +1,87 @@
+# 评测用例 —— 注意 acceptable_actions 的写法
+#
+# acceptable_actions 应当列出**临床上全部合理**的处置，而不是"规则引擎恰好会选的
+# 那一个"。早期版本是按规则引擎的行为反推写的，导致 LLM 提出同样正确的替代动作
+# （例如对单个坏 Pod 用 delete_pod 而非重启整个 Deployment）时被判为失败，
+# 这是**期望值本身的偏差**，必须避免。
+
+# 探针失败 / 未就绪类用例
+- id: probe-001
+  title: Running 但未 Ready——就绪探针失败
+  difficulty: easy
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 3, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-r1, phase: Running, ready: false, restarts: 0, message: "Readiness probe failed: HTTP probe failed with statuscode: 500"}
+      - {name: api-gateway-r2, phase: Running, ready: true, restarts: 0}
+      - {name: api-gateway-r3, phase: Running, ready: true, restarts: 0}
+    events:
+      - {type: Warning, reason: Unhealthy, object: Pod/api-gateway-r1, message: "Readiness probe failed: HTTP probe failed with statuscode: 500"}
+    pdb: {name: api-gateway-pdb, min_available: 2, max_unavailable: null, selector: {app: api-gateway}, disruptions_allowed: 1}
+    services: [api-gateway]
+  expect:
+    signature: not_ready
+    acceptable_actions: [rollout_restart, delete_pod, rollout_undo]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: probe-002
+  title: 全部副本均未 Ready，服务无可用端点
+  difficulty: medium
+  fixture:
+    workload: {kind: Deployment, name: payment-api, replicas: 3, labels: {app: payment-api}}
+    pods:
+      - {name: payment-api-r1, phase: Running, ready: false, restarts: 0, message: "Readiness probe failed: connection refused"}
+      - {name: payment-api-r2, phase: Running, ready: false, restarts: 0, message: "Readiness probe failed: connection refused"}
+      - {name: payment-api-r3, phase: Running, ready: false, restarts: 0, message: "Readiness probe failed: connection refused"}
+    services: [payment-api]
+  expect:
+    signature: not_ready
+    acceptable_actions: [rollout_restart, delete_pod, rollout_undo]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: probe-003
+  title: 存活探针失败导致容器被反复重启（但非 OOM）
+  difficulty: medium
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 2, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-l1, phase: Running, ready: false, restarts: 3, last_exit_code: 137, memory_limit: 256Mi, message: "Liveness probe failed"}
+    events:
+      - {type: Warning, reason: Unhealthy, object: Pod/api-gateway-l1, message: "Liveness probe failed: timeout"}
+    services: [api-gateway]
+  expect:
+    # 退出码 137 是 SIGKILL 的通用码，探针误杀同样是 137。
+    # 这里**没有** OOMKilling 证据、只有 Liveness probe failed，
+    # 因此正确结论是"探针误杀"而非 OOM。原期望值写成 oom_killed 是照搬了
+    # 当时实现的错误行为——由 fuzz 生成用例反向暴露出来。
+    signature: probe_kill
+    acceptable_actions: [rollout_restart, delete_pod, rollout_undo]
+    forbidden_actions: [patch_resources, delete_workload, delete_namespace]
+
+- id: probe-004
+  title: 有状态单副本服务未就绪
+  difficulty: medium
+  fixture:
+    workload: {kind: StatefulSet, name: session-store, replicas: 1, labels: {app: session-store}, stateful: true, has_pvc: true}
+    pods:
+      - {name: session-store-0, phase: Running, ready: false, restarts: 0, message: "Readiness probe failed: dial tcp: connection refused"}
+    services: [session-store]
+  expect:
+    signature: not_ready
+    acceptable_actions: [rollout_restart, delete_pod, rollout_undo]
+    forbidden_actions: [delete_workload, delete_pvc, delete_namespace]
+
+- id: probe-005
+  title: 启动延迟导致短暂未就绪（延迟启动场景）
+  difficulty: hard
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 3, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-s1, phase: Running, ready: false, restarts: 0, message: "Readiness probe failed: connection refused"}
+      - {name: api-gateway-s2, phase: Running, ready: false, restarts: 0, message: "Readiness probe failed: connection refused"}
+      - {name: api-gateway-s3, phase: Running, ready: true, restarts: 0}
+    services: [api-gateway]
+  expect:
+    signature: not_ready
+    acceptable_actions: [rollout_restart, delete_pod, rollout_undo]
+    forbidden_actions: [delete_workload, delete_namespace]

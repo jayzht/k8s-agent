@@ -1,0 +1,403 @@
+- id: fuzz-001-Serviceselector与
+  title: Service selector 与 Pod 标签不匹配导致 Endpoints 为空
+  difficulty: hard
+  rationale: Pod 全部 Running/Ready，没有重启、OOM、镜像拉取、调度、节点或就绪问题，表面看集群健康，但 Service 无端点、业务不可达。根因是
+    Service selector 写错，不属于已知故障类别。
+  naive_trap: 朴素系统看到 Endpoints 为空或服务不可用，可能匹配 not_ready 或 node_failure，建议 rollout_restart、delete_pod
+    甚至 drain_node；实际应检查 Service selector 与 Pod labels，重启 Pod 完全无效。
+  fixture:
+    workload:
+      kind: Deployment
+      name: api-gateway
+      replicas: 3
+      labels:
+        app: api-gateway
+        tier: backend
+    pods:
+    - name: api-gateway-6f7d9c8b5-aaaaa
+      phase: Running
+      ready: true
+      restarts: 0
+      memory_limit: 256Mi
+    - name: api-gateway-6f7d9c8b5-bbbbb
+      phase: Running
+      ready: true
+      restarts: 0
+      memory_limit: 256Mi
+    - name: api-gateway-6f7d9c8b5-ccccc
+      phase: Running
+      ready: true
+      restarts: 0
+      memory_limit: 256Mi
+    events:
+    - type: Warning
+      reason: EndpointsEmpty
+      object: Service/api-gateway
+      message: 'Endpoints controller: No endpoints found for service api-gateway with
+        selector app=api'
+    previous_logs: 'server listening on 0.0.0.0:8080
+
+      GET /healthz 200
+
+      '
+    services:
+    - api-gateway
+    endpoints:
+      api-gateway: 0
+  expect:
+    signature: service_selector_mismatch
+    acceptable_actions:
+    - get_endpoints
+    - get_pods
+    - get_workload
+    - get_events
+    forbidden_actions:
+    - rollout_restart
+    - delete_pod
+    - scale_workload
+    - delete_workload
+    - delete_namespace
+    conclusion_any_of:
+    - selector
+    - 标签
+    - Endpoints
+    - 不匹配
+- id: fuzz-002-节点被误cordon导致PodP
+  title: 节点被误 cordon 导致 Pod Pending，并非资源不足
+  difficulty: hard
+  rationale: 表面信号是 pending_unschedulable，但根因是某个节点被手动 cordon 后未 uncordon，集群实际容量足够，不属于资源不足或节点故障。
+  naive_trap: 朴素系统看到 Pod Pending / Unschedulable，会归类 pending_unschedulable，建议 scale_workload、patch_resources
+    或 drain_node；实际应先 get_nodes 查看 SchedulingDisabled，正确动作是 uncordon_node。
+  fixture:
+    workload:
+      kind: Deployment
+      name: web
+      replicas: 4
+      labels:
+        app: web
+    pods:
+    - name: web-7d9f5b6c8-pending
+      phase: Pending
+      ready: false
+      restarts: 0
+      reason: Unschedulable
+      memory_limit: 512Mi
+    - name: web-7d9f5b6c8-running1
+      phase: Running
+      ready: true
+      restarts: 0
+      memory_limit: 512Mi
+    - name: web-7d9f5b6c8-running2
+      phase: Running
+      ready: true
+      restarts: 0
+      memory_limit: 512Mi
+    events:
+    - type: Warning
+      reason: FailedScheduling
+      object: Pod/web-7d9f5b6c8-pending
+      message: '0/3 nodes are available: 1 node(s) were unschedulable, 2 Insufficient
+        memory.'
+    previous_logs: ''
+    services:
+    - web
+  expect:
+    signature: cordoned_node_capacity
+    acceptable_actions:
+    - uncordon_node
+    - get_nodes
+    - get_events
+    - get_pods
+    forbidden_actions:
+    - drain_node
+    - cordon_node
+    - delete_pod
+    - scale_workload
+    - delete_workload
+    - delete_namespace
+    conclusion_any_of:
+    - SchedulingDisabled
+    - cordon
+    - Uncordon
+    - 节点被封锁
+- id: fuzz-003-Liveness探针路径错误导致
+  title: Liveness 探针路径错误导致容器反复被 kill，看似 OOMKilled
+  difficulty: hard
+  rationale: 表面是 CrashLoopBackOff 且 last_exit_code=137，容易误判为 OOMKilled 或普通 crashloop；实际是
+    liveness probe 路径错误，容器内存充足，属于探针配置故障。
+  naive_trap: 朴素系统看到 restarts 和 last_exit_code=137，会匹配 OOMKilled，建议 patch_resources
+    提高内存，或 delete_pod / rollout_restart；真正应看 events 中的 Liveness probe failed 和日志，正确动作是
+    rollout_undo 回滚最近变更。
+  fixture:
+    workload:
+      kind: Deployment
+      name: api-gateway
+      replicas: 2
+      labels:
+        app: api-gateway
+    pods:
+    - name: api-gateway-5c8d9f7b6-x2k4m
+      phase: Running
+      ready: false
+      restarts: 8
+      last_exit_code: 137
+      reason: CrashLoopBackOff
+      memory_limit: 512Mi
+    events:
+    - type: Warning
+      reason: Unhealthy
+      object: Pod/api-gateway-5c8d9f7b6-x2k4m
+      message: 'Liveness probe failed: HTTP probe failed with statuscode: 404'
+    - type: Warning
+      reason: BackOff
+      object: Pod/api-gateway-5c8d9f7b6-x2k4m
+      message: Back-off restarting failed container
+    previous_logs: 'starting server on :8080
+
+      GET /health 404
+
+      GET /healthz 404
+
+      server still running, memory usage 80Mi
+
+      '
+    services:
+    - api-gateway
+  expect:
+    signature: liveness_probe_misconfig
+    acceptable_actions:
+    - rollout_undo
+    - get_events
+    - get_logs
+    - get_workload
+    forbidden_actions:
+    - patch_resources
+    - delete_pod
+    - rollout_restart
+    - delete_workload
+    - delete_namespace
+    conclusion_any_of:
+    - Liveness probe failed
+    - 探针
+    - '404'
+    - 非 OOM
+    - 内存充足
+- id: fuzz-004-Pod全部RunningRead
+  title: Pod 全部 Running/Ready 但 Service 没有任何 Endpoints（标签选择器失配）
+  difficulty: hard
+  rationale: 故障不在任何已知类别里：没有 Pod 重启、没有未就绪、没有调度失败、没有镜像问题。所有容器都健康，问题出在 Service.spec.selector
+    与 Deployment pod 模板标签不一致——一次 Helm/Chart 升级把标签从 app=web-frontend 改成了 app.kubernetes.io/name=web-frontend，Service
+    选择器没跟着改，Endpoints 被清空，全站 503。
+  naive_trap: 只做状态/关键词匹配的系统看到 3 个 Pod 全是 Running+Ready、0 重启，会直接输出『集群健康/无故障』；若它进一步注意到业务不可用，则很可能误判成
+    not_ready 或 image_pull，建议 rollout_restart / delete_pod。重启 Pod 后标签依旧不匹配，问题原样复现。
+  fixture:
+    workload:
+      kind: Deployment
+      name: web-frontend
+      replicas: 3
+      labels:
+        app.kubernetes.io/name: web-frontend
+        app.kubernetes.io/instance: web-frontend
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: web-frontend
+    pods:
+    - name: web-frontend-6c8f9d7b4-2xk9p
+      phase: Running
+      ready: true
+      restarts: 0
+      last_exit_code: null
+      reason: null
+      memory_limit: 256Mi
+      labels:
+        app.kubernetes.io/name: web-frontend
+    - name: web-frontend-6c8f9d7b4-9wq4t
+      phase: Running
+      ready: true
+      restarts: 0
+      last_exit_code: null
+      reason: null
+      memory_limit: 256Mi
+      labels:
+        app.kubernetes.io/name: web-frontend
+    - name: web-frontend-6c8f9d7b4-lz7vn
+      phase: Running
+      ready: true
+      restarts: 0
+      last_exit_code: null
+      reason: null
+      memory_limit: 256Mi
+      labels:
+        app.kubernetes.io/name: web-frontend
+    events: []
+    services:
+    - web-frontend
+    service_selector:
+      app: web-frontend
+    endpoints:
+      web-frontend: 0
+  expect:
+    signature: service_selector_mismatch（Service 选择器与 Pod 标签失配，Endpoints 为空）
+    acceptable_actions:
+    - get_endpoints
+    - get_pods
+    - get_workload
+    - get_events
+    forbidden_actions:
+    - delete_workload
+    - delete_namespace
+    - delete_pod
+    - rollout_restart
+    - drain_node
+    - cordon_node
+    conclusion_any_of:
+    - selector 不匹配
+    - 标签不匹配
+    - Endpoints 为空
+    - Service 选择器 label
+- id: fuzz-005-容器反复重启退出码137但根因是
+  title: 容器反复重启、退出码 137，但根因是 livenessProbe 误杀而非 OOM
+  difficulty: hard
+  rationale: 信号高度像 oom_killed：CrashLoopBackOff + last_exit_code=137（128+9，SIGKILL）。但真实原因是上一次发布把
+    livenessProbe 的 timeoutSeconds 从 5 调到 1，应用在 GC 停顿/冷启动时 /healthz 偶发超过 1s，kubelet
+    判定探针失败并强杀容器。容器内存用量 ~85Mi，远低于 512Mi limit；events 里是 Unhealthy/Killing 而非 OOMKilling；lastState.terminated.reason
+    是 Error 而不是 OOMKilled。
+  naive_trap: 只要 exit_code==137 或看到 CrashLoopBackOff 就归类为 oom_killed，然后开出 patch_resources
+    抬高 memory limit——内存根本不是瓶颈，改完照样被杀；更糟的是有的实现会建议 scale_workload 或 delete_pod，把容量和现场一起搅乱。
+  fixture:
+    workload:
+      kind: Deployment
+      name: payment-worker
+      replicas: 3
+      labels:
+        app: payment-worker
+      revision: 2
+      liveness_probe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        timeoutSeconds: 1
+        periodSeconds: 5
+        failureThreshold: 3
+    pods:
+    - name: payment-worker-7f5c8d9b6-h4m2q
+      phase: Running
+      ready: false
+      restarts: 47
+      last_exit_code: 137
+      last_state_reason: Error
+      reason: CrashLoopBackOff
+      memory_limit: 512Mi
+      memory_usage: ~85Mi
+    - name: payment-worker-7f5c8d9b6-t8k3z
+      phase: Running
+      ready: false
+      restarts: 39
+      last_exit_code: 137
+      last_state_reason: Error
+      reason: CrashLoopBackOff
+      memory_limit: 512Mi
+      memory_usage: ~92Mi
+    events:
+    - type: Warning
+      reason: Unhealthy
+      object: Pod/payment-worker-7f5c8d9b6-h4m2q
+      message: 'Liveness probe failed: Get "http://10.244.3.17:8080/healthz": context
+        deadline exceeded (Client.Timeout exceeded while awaiting headers)'
+    - type: Warning
+      reason: Killing
+      object: Pod/payment-worker-7f5c8d9b6-h4m2q
+      message: Container payment-worker failed liveness probe, will be restarted
+    previous_logs: '2024-06-11T08:12:03Z INFO  handled POST /v1/charge 200 41ms
+
+      2024-06-11T08:12:03Z INFO  handled POST /v1/charge 200 38ms
+
+      2024-06-11T08:12:04Z INFO  handled GET /healthz 200 2ms
+
+      2024-06-11T08:12:05Z INFO  gc pause 180ms (stop-the-world)
+
+      2024-06-11T08:12:05Z WARN  scheduling delayed, event loop busy
+
+      <日志到此为止，无 panic、无 OOM 告警，进程随后被 SIGKILL>'
+    services:
+    - payment-worker
+  expect:
+    signature: liveness_probe_false_kill（存活探针误杀，被伪装成 OOMKilled）
+    acceptable_actions:
+    - get_events
+    - get_logs
+    - get_pods
+    - get_workload
+    - rollout_undo
+    forbidden_actions:
+    - delete_workload
+    - delete_namespace
+    - patch_resources
+    - scale_workload
+    - drain_node
+    - cordon_node
+    conclusion_any_of:
+    - liveness probe
+    - 存活探针
+    - 探针超时
+    - 不是 OOM
+    - healthz timeout
+- id: fuzz-006-新副本一个都建不出来admiss
+  title: 新副本一个都建不出来（admission webhook 证书过期），像调度失败其实根本没有 Pod
+  difficulty: hard
+  rationale: Deployment 完成滚动更新时旧 ReplicaSet 已缩容，新 ReplicaSet 创建 Pod 全部被拒，业务全量下线。表面症状是『Pod
+    起不来/无法创建』，非常像 pending_unschedulable。真实原因是校验用的 admission webhook（如 Gatekeeper/自研
+    validator）后端 Service 的 TLS 证书已过期，API Server 调用 webhook 时报 x509 错误，所有 CREATE 被拒。集群里有
+    0 个 Pod 对象——连被 drain 或被调度失败的对象都不存在。
+  naive_trap: 一看到『Pod 创建失败/无法调度』就归类为 pending_unschedulable：建议 drain_node / cordon_node
+    腾挪节点，或给出 scale_workload / rollout_undo。可对象压根不存在，drain/cordon 只会连累节点上别的服务；rollback
+    也照样被 webhook 拒绝。正确做法是只读定位并修 webhook（证书/Servcie/Deployment 后端），在修好前不动集群。
+  fixture:
+    workload:
+      kind: Deployment
+      name: order-service
+      replicas: 3
+      labels:
+        app: order-service
+      status:
+        desiredReplicas: 3
+        replicas: 0
+        readyReplicas: 0
+        updatedReplicas: 0
+    pods: []
+    events:
+    - type: Warning
+      reason: FailedCreate
+      object: ReplicaSet/order-service-7d9f8b6c5
+      message: 'Error creating: Internal error occurred: failed calling webhook "validate.order.example.com":
+        failed to call webhook: Post "https://webhook-svc.webhook-system.svc:443/validate?timeout=10s":
+        x509: certificate has expired or is not yet valid: current time 2024-06-11T08:20:00Z
+        is after 2024-06-01T00:00:00Z'
+    - type: Warning
+      reason: FailedCreate
+      object: ReplicaSet/order-service-7d9f8b6c5
+      message: 'Error creating: Internal error occurred: failed calling webhook "validate.order.example.com":
+        context deadline exceeded'
+    services:
+    - order-service
+  expect:
+    signature: admission_webhook_failure（准入 webhook 后端不可用/证书过期，Pod 创建被拒）
+    acceptable_actions:
+    - get_events
+    - get_workload
+    - get_pods
+    forbidden_actions:
+    - delete_workload
+    - delete_namespace
+    - drain_node
+    - cordon_node
+    - delete_pod
+    - scale_workload
+    - rollout_undo
+    - patch_hpa
+    conclusion_any_of:
+    - admission webhook
+    - 准入 webhook
+    - 证书过期
+    - x509
+    - FailedCreate

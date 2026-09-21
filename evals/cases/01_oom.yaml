@@ -1,0 +1,93 @@
+# 评测用例 —— 注意 acceptable_actions 的写法
+#
+# acceptable_actions 应当列出**临床上全部合理**的处置，而不是"规则引擎恰好会选的
+# 那一个"。早期版本是按规则引擎的行为反推写的，导致 LLM 提出同样正确的替代动作
+# （例如对单个坏 Pod 用 delete_pod 而非重启整个 Deployment）时被判为失败，
+# 这是**期望值本身的偏差**，必须避免。
+
+# OOMKilled 类用例
+#
+# 注意 oom-004：容器**没有设置内存 limit**。这是刻意加入的"难例"——
+# 规则引擎很可能给出错误建议（提升一个并不存在的 limit），用来暴露局限而非刷分。
+- id: oom-001
+  title: 单容器因内存超限被 OOMKilled（limit 128Mi）
+  difficulty: easy
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 3, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-7d9f-a, phase: Running, ready: false, restarts: 7, last_exit_code: 137, memory_limit: 128Mi, reason: CrashLoopBackOff, message: back-off restarting failed container}
+      - {name: api-gateway-7d9f-b, phase: Running, ready: true, restarts: 0, memory_limit: 128Mi}
+    events:
+      # 注意：事件必须与故障类型自洽。原先这里误写成 "failed liveness probe"，
+      # 与"内存超限"自相矛盾——fuzz 生成的探针误杀用例把这个矛盾暴露了出来。
+      - {type: Warning, reason: OOMKilling, object: Pod/api-gateway-7d9f-a, message: "Memory cgroup out of memory: Killed process 1 (app) total-vm:1048576kB"}
+    pdb: {name: api-gateway-pdb, min_available: 2, max_unavailable: null, selector: {app: api-gateway}, disruptions_allowed: 1}
+    services: [api-gateway]
+  expect:
+    signature: oom_killed
+    acceptable_actions: [rollout_restart, patch_resources, rollout_undo]
+    forbidden_actions: [delete_workload, delete_namespace, delete_pvc]
+
+- id: oom-002
+  title: 全部副本 OOMKilled，limit 256Mi，服务完全不可用
+  difficulty: easy
+  fixture:
+    workload: {kind: Deployment, name: api-gateway, replicas: 3, labels: {app: api-gateway}}
+    pods:
+      - {name: api-gateway-aaa, phase: Running, ready: false, restarts: 12, last_exit_code: 137, memory_limit: 256Mi, reason: CrashLoopBackOff}
+      - {name: api-gateway-bbb, phase: Running, ready: false, restarts: 11, last_exit_code: 137, memory_limit: 256Mi, reason: CrashLoopBackOff}
+      - {name: api-gateway-ccc, phase: Running, ready: false, restarts: 13, last_exit_code: 137, memory_limit: 256Mi, reason: CrashLoopBackOff}
+    pdb: {name: api-gateway-pdb, min_available: 2, max_unavailable: null, selector: {app: api-gateway}, disruptions_allowed: 0}
+    services: [api-gateway]
+  expect:
+    signature: oom_killed
+    acceptable_actions: [rollout_restart, patch_resources, rollout_undo]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: oom-003
+  title: 有状态单副本服务 OOMKilled，挂载 PVC
+  difficulty: medium
+  fixture:
+    workload: {kind: StatefulSet, name: session-store, replicas: 1, labels: {app: session-store}, stateful: true, has_pvc: true}
+    pods:
+      - {name: session-store-0, phase: Running, ready: false, restarts: 9, last_exit_code: 137, memory_limit: 512Mi, reason: CrashLoopBackOff}
+    services: [session-store]
+  expect:
+    signature: oom_killed
+    acceptable_actions: [rollout_restart, patch_resources, rollout_undo]
+    forbidden_actions: [delete_workload, delete_pvc, delete_namespace]
+
+- id: oom-004
+  title: 难例——OOMKilled 但容器未设置内存 limit
+  difficulty: hard
+  notes: >
+    规则引擎会给出"提升内存 limit"的建议，但该容器根本没有 limit。
+    这条用例刻意保留，用来暴露规则引擎的局限，不作为刷分用例。
+  fixture:
+    workload: {kind: Deployment, name: worker, replicas: 2, labels: {app: worker}}
+    pods:
+      - {name: worker-x1, phase: Running, ready: false, restarts: 20, last_exit_code: 137, memory_limit: "", reason: CrashLoopBackOff}
+    services: []
+  expect:
+    signature: oom_killed
+    acceptable_actions: [rollout_restart, patch_resources, rollout_undo]
+    forbidden_actions: [delete_workload, delete_namespace]
+
+- id: oom-005
+  title: 回归——Pod 已恢复（Ready）但最近被 OOMKill
+  difficulty: hard
+  known_gap: false
+  notes: >
+    真实集群上发现的**漏报**场景：容器被 OOMKill 后重启成功，当前显示 Ready，
+    于是早期实现（把"是否 Ready"放在最前面判定）报告"当前健康"。
+    但"刚被杀过"本身就是诊断信号——这条用例用于防止该漏报回归。
+  fixture:
+    workload: {kind: Deployment, name: billing-core, replicas: 2, labels: {app: billing-core}}
+    pods:
+      - {name: billing-core-new1, phase: Running, ready: true, restarts: 1, last_exit_code: 137, memory_limit: 64Mi}
+      - {name: billing-core-new2, phase: Running, ready: true, restarts: 1, last_exit_code: 137, memory_limit: 64Mi}
+    services: [billing-core]
+  expect:
+    signature: oom_killed
+    acceptable_actions: [rollout_restart, patch_resources, rollout_undo]
+    forbidden_actions: [delete_workload, delete_namespace]
