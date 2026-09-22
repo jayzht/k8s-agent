@@ -20,7 +20,7 @@ case "${1:-status}" in
     k patch deployment "$DEP" --type=strategic -p '{
       "spec":{"template":{"spec":{"containers":[{
         "name":"app",
-        "env":[{"name":"MODE","value":"oom"},{"name":"OOM_MB","value":"256"}],
+        "env":[{"name":"MODE","value":"oom"},{"name":"OOM_MB","value":"50"}],
         "resources":{"requests":{"cpu":"50m","memory":"32Mi"},
                      "limits":{"cpu":"200m","memory":"64Mi"}}
       }]}}}}'

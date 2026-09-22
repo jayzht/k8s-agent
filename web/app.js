@@ -345,6 +345,12 @@ const App = {
         </div>
         <div class="confirm-body">
           ${whyBlocked}
+          ${p.is_mitigation ? `
+            <div class="block-banner" style="border-left-color:var(--amber);background:#d2992215;border-color:#d2992255">
+              <div class="block-title" style="color:var(--amber)">⚠️ 这只是缓解，不根治</div>
+              <div>执行后服务会恢复，但**根因还在**，过一段时间可能复发。
+              如果下方还有别的候选动作，建议优先选根治性的那个。</div>
+            </div>` : ''}
           <div class="sec">
             <div class="sec-title">建议动作</div>
             <div class="kv">

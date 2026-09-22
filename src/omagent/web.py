@@ -244,6 +244,7 @@ class OpsWebApp:
                 cand.tool,
                 cand.params,
                 rationale=cand.rationale,
+                note=cand.note,
                 evidence=diag.evidence,
                 trace_id=stored["trace"],
             )
@@ -365,6 +366,9 @@ def _proposal_view(prop: Proposal) -> dict[str, Any]:
     return {
         **prop.to_dict(),
         "cooldown_left": cooldown_left,
+        # 告诉界面：这个动作是"根治"还是"只是缓解"。
+        # 不区分的话，用户点完看到"成功"却发现问题复发，会以为系统坏了。
+        "is_mitigation": bool(prop.note) and ("缓解" in prop.note),
         "tier_label": prop.effective_tier.label,
         "confirm_strength": prop.effective_tier.confirm_strength,
         "requires_approval": prop.requires_approval,
@@ -520,6 +524,7 @@ def serve(
     knowledge_path: str | None = None,
     policy_path: str | None = None,
     demo: bool = False,
+    cooldown: int | None = None,
 ) -> None:
     k8s = K8sClient(kubeconfig=kubeconfig)
     policy = Policy(policy_path) if policy_path else Policy()
@@ -529,6 +534,12 @@ def serve(
 
     app = OpsWebApp(agent, audit, knowledge, operator=operator,
                     default_planner=planner, demo_mode=demo)
+    # 演示模式的冷却期默认缩短：生产用 300s 防抖动，
+    # 但演示时"刚修完想再试一次就被拦 5 分钟"会让人以为程序坏了。
+    if cooldown is not None:
+        agent.policy.cooldown_seconds = int(cooldown)
+    elif demo:
+        agent.policy.cooldown_seconds = min(agent.policy.cooldown_seconds, 20)
     handler = type("BoundHandler", (Handler,), {"app": app})
 
     httpd = ThreadingHTTPServer((host, port), handler)
@@ -538,6 +549,8 @@ def serve(
         print("  ⚠️ 已监听所有网卡——同网段可访问。仅用于演示/内网，勿暴露公网。")
     else:
         print("  （仅监听本机；如需外部访问请加 --host 0.0.0.0）")
+    print(f"  变更冷却期：{agent.policy.cooldown_seconds}s"
+          + ("（演示模式已缩短）" if demo and cooldown is None else ""))
     print("  所有写操作仍需在此界面人工确认；故障注入仅在 --demo 下可用。")
     try:
         httpd.serve_forever()

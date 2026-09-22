@@ -197,6 +197,7 @@ class OpsAgent:
         params: dict[str, Any],
         *,
         rationale: str = "",
+        note: str = "",
         evidence: list[Evidence] | None = None,
         trace_id: str | None = None,
     ) -> Proposal:
@@ -218,6 +219,7 @@ class OpsAgent:
             tier=rule.tier,
             target=target,
             rationale=rationale,
+            note=note,
             evidence=list(evidence or []),
             rollback=rule.rollback,
             rollback_eta=rule.rollback_eta,

@@ -565,6 +565,7 @@ def cmd_web(args) -> int:
         knowledge_path=args.knowledge,
         policy_path=args.policy,
         demo=args.demo,
+        cooldown=args.cooldown,
     )
     return 0
 
@@ -826,7 +827,9 @@ def main(argv: list[str] | None = None) -> int:
         help="默认规划器（界面上可切换）",
     )
     s.add_argument("--demo", action="store_true",
-                   help="开启演示模式：界面上可直接注入沙箱故障（仅用于演示）")
+                   help="开启演示模式：界面上可直接注入沙箱故障，并缩短变更冷却期")
+    s.add_argument("--cooldown", type=int, default=None,
+                   help="同一工作负载的变更冷却秒数（默认 300；演示模式自动降到 20）")
     s.set_defaults(fn=cmd_web)
 
     s = sub.add_parser("knowledge", help="查看/检索沉淀的故障处置知识")

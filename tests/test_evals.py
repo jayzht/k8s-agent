@@ -406,3 +406,38 @@ def test_fingerprint_changes_when_harness_changes(tmp_path, monkeypatch):
     finally:
         case_file.write_text(original, encoding="utf-8")
     assert code_fingerprint()["cases"] == before["cases"]
+
+
+def test_root_cause_action_ranks_before_mitigation():
+    """★ 回归：根治动作必须排在缓解动作之前。
+
+    背景：OOM 场景曾把 `rollout_restart` 放在首选，而它自己的说明写着
+    "只缓解不根治：内存 limit 不变，重启后仍会 OOM"。
+    用户按顺序点第一个 → 界面显示"修复成功" → 问题立刻复发。
+    **自己都标注了不根治的动作，不该放在首选让人点。**
+    """
+    from omagent.planner import RuleBasedPlanner
+
+    checked = 0
+    for case in load_cases():
+        if case.expect_signature not in ("oom_killed", "crashloop", "image_pull",
+                                         "pending_unschedulable"):
+            continue
+        diag = RuleBasedPlanner(FixtureK8s(case)).diagnose(
+            case.namespace, case.fixture_workload.name,
+            case.fixture_workload.kind.lower(),
+        )
+        if not diag.candidates:
+            continue
+        checked += 1
+        first = diag.candidates[0]
+        # 不变式：**只要列表里存在根治性动作，它就必须排在首位。**
+        # （如果某个场景白名单里根本没有根治动作——比如调度约束不归本产品管——
+        # 那只有缓解动作是可接受的，此时界面负责把"这只是缓解"说清楚。）
+        has_root_cause = any("缓解" not in (c.note or "") for c in diag.candidates)
+        if has_root_cause:
+            assert "缓解" not in (first.note or ""), (
+                f"{case.id}（{case.expect_signature}）明明有根治动作，"
+                f"首选却是缓解性的「{first.tool}」：{first.note}"
+            )
+    assert checked >= 4, f"覆盖的场景太少（{checked}），这条回归测试可能失效了"

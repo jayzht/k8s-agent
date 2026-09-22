@@ -1435,13 +1435,12 @@ class RuleBasedPlanner:
         except Exception:  # noqa: BLE001
             pass
 
+        # ⚠️ 顺序很重要：**根治动作必须排在缓解动作前面**。
+        # 曾经把 rollout_restart 放在首选、patch_resources 放第二，
+        # 结果用户按顺序点第一个 —— 重启完 OOM 立刻复发，
+        # 而界面显示"修复成功"。**自己都标注了"只缓解不根治"的动作，
+        # 就不该放在首选让人点。**
         diag.candidates += [
-            Candidate(
-                "rollout_restart",
-                {"namespace": ns, "name": workload, "kind": kind},
-                "重启以清理当前异常实例，快速恢复服务。",
-                note="⚠️ 只缓解不根治：如果内存 limit 不变，重启后仍会再次 OOM。",
-            ),
             Candidate(
                 "patch_resources",
                 {
@@ -1450,8 +1449,15 @@ class RuleBasedPlanner:
                     "container": (victim.containers or ["app"])[0],
                     "memory_limit": _double_memory(limit),
                 },
-                f"将内存 limit 从 {limit} 提升到 {_double_memory(limit)}，从根因上缓解。",
-                note="需要评估节点剩余内存与集群配额，属于 T2 中危操作。",
+                f"把内存上限从 {limit} 提到 {_double_memory(limit)}——"
+                f"**这才是根治**：不改上限，重启多少次都会再被 OOM 杀掉。",
+                note="T2 中危操作：需确认节点剩余内存与命名空间配额够用。",
+            ),
+            Candidate(
+                "rollout_restart",
+                {"namespace": ns, "name": workload, "kind": kind},
+                "重启以清理当前异常实例（**只是缓解**，不解决内存上限过低的问题）。",
+                note="⚠️ 如果暂时不能改上限，重启能让服务先恢复一段时间，但会复发。",
             ),
         ]
         return diag
@@ -1502,9 +1508,13 @@ class RuleBasedPlanner:
             diag.evidence.append(
                 Evidence("state", f"Pod/{p.name}", f"{p.reason}: {p.message[:200]}", "kubectl describe pod")
             )
+        # 调度失败的原因**几乎只在事件里**（Pod 的 status.message 通常是空的），
+        # 所以这里必须把事件文案收集起来，后面判断"是不是规格约束造成的"要用。
+        sched_texts: list[str] = []
         try:
             for e in self.k8s.list_events(ns, involved_name=workload)[:5]:
                 if e["reason"] in ("FailedScheduling", "NotTriggerScaleUp"):
+                    sched_texts.append(e["message"] or "")
                     diag.evidence.append(
                         Evidence("event", e["object"], f"{e['reason']}: {e['message'][:250]}", "events")
                     )
@@ -1530,6 +1540,27 @@ class RuleBasedPlanner:
                 f"这比缩容更可能是根因"
             )
 
+        # 若调度失败是**规格约束**造成的（nodeSelector/亲和性/污点），
+        # 而这次变更是最近才引入的，那么真正的根治动作是**回滚**——
+        # 把 pod template 退回上一个没有该约束的版本。
+        # 这条比缩容更该排在前面：缩容只是让 Pending 的 Pod 消失，服务反而更少。
+        # 判据：调度失败是**规格约束**造成的。
+        # 注意要同时看事件文案——实测 Pod.status.message 常常是空的，
+        # 只查它会永远判不出来（这个 bug 让"调度失败"场景只给出缓解动作）。
+        hints = ("node selector", "affinity", "taint", "didn't match",
+                 "node(s) didn't match", "untolerated")
+        blob = " ".join([(p.message or "") for p in pending] + sched_texts).lower()
+        spec_constraint = any(h in blob for h in hints)
+        if spec_constraint:
+            diag.candidates.append(
+                Candidate(
+                    "rollout_undo",
+                    {"namespace": ns, "name": workload, "kind": kind},
+                    "调度失败的原因是 **Pod 模板里的调度约束**（nodeSelector/亲和性/污点），"
+                    "而这类约束通常是最近一次变更引入的——**回滚到上一个版本就能让 Pod 正常调度**。",
+                    note="⚠️ 缩容**不是根治**：它只是让 Pending 的 Pod 消失，服务能力反而下降。",
+                )
+            )
         diag.candidates.append(
             Candidate(
                 "scale_workload",
@@ -1539,7 +1570,7 @@ class RuleBasedPlanner:
                     "kind": kind,
                     "replicas": max(0, len(pods) - len(pending)),
                 },
-                "先缩容到可调度的副本数，缓解资源争抢。",
+                "先缩容到可调度的副本数，缓解资源争抢。（**只是缓解**）",
                 note="⚠️ 只缓解不根治：需要扩容节点或修正调度约束。",
             )
         )

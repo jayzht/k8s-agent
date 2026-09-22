@@ -261,6 +261,11 @@ function renderPlan(p, c) {
 
   if (p.dry_run_ok) rows.push(['试跑结果', '✅ 已经先试跑过一遍，确认能成功']);
 
+  const mitigate = (p.is_mitigation && !blocked) ? `
+    <div class="warn">⚠️ <b>这只是缓解，不根治。</b>
+      执行后服务会恢复，但根因还在，过一段时间可能复发。<br>
+      如果下面还有别的选择，建议先看根治性的那个。</div>` : '';
+
   const why = blocked ? `
     <div class="blocked">
       <div class="t">这项操作被安全规则拦住了</div>
@@ -270,6 +275,7 @@ function renderPlan(p, c) {
     </div>` : '';
 
   $('plan').innerHTML = `
+    ${mitigate}
     ${why}
     <p class="plan-title">它建议这么修</p>
     <p class="plan-sub">这只是建议。要不要做，由你决定。</p>

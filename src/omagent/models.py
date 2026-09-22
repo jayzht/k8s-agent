@@ -137,6 +137,10 @@ class Proposal:
     tier: Tier
     target: Target
     rationale: str = ""
+    # 候选动作自带的提示（如"只缓解不根治"）。带上它，界面才能诚实地
+    # 告诉用户"这次执行治不治本"——不说的话，用户看到"成功"却见问题复发，
+    # 会以为系统坏了。
+    note: str = ""
     evidence: list[Evidence] = field(default_factory=list)
     impact: Impact = field(default_factory=Impact)
     dry_run_ok: bool | None = None

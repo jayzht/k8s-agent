@@ -53,6 +53,7 @@ class Policy:
         self,
         path: str | Path = DEFAULT_POLICY_PATH,
         state_path: str | Path | None = None,
+        cooldown_seconds: int | None = None,
     ):
         self.path = Path(path)
         # 冷却状态必须**落盘**：放在内存里意味着"重启 Agent 即可绕过冷却期"，
@@ -61,6 +62,8 @@ class Policy:
         raw = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
         self.version: int = int(raw.get("version", 1))
 
+        # 冷却期可覆盖：默认值（300s）是为**生产**防抖动设计的，
+        # 但在演示/联调环境里会让人"刚修完想再试一次就被拦"，体验极差。
         self.allowed_namespaces: set[str] = set(raw.get("allowed_namespaces") or [])
         self.readonly_namespaces: set[str] = set(raw.get("readonly_namespaces") or [])
         self.allowed_nodes: set[str] = set(raw.get("allowed_nodes") or [])
@@ -71,7 +74,10 @@ class Policy:
 
         cb = raw.get("circuit_breakers") or {}
         self.max_impacted_objects = int(cb.get("max_impacted_objects", 10))
-        self.cooldown_seconds = int(cb.get("per_workload_cooldown_seconds", 300))
+        self.cooldown_seconds = int(
+            cooldown_seconds if cooldown_seconds is not None
+            else cb.get("per_workload_cooldown_seconds", 300)
+        )
         self.escalate_singleton_stateful = bool(cb.get("escalate_singleton_stateful", True))
         self.escalate_pvc_backed = bool(cb.get("escalate_pvc_backed", True))
         self.require_dry_run = bool(cb.get("require_dry_run", True))

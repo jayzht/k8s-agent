@@ -59,7 +59,13 @@ case "$MODE" in
     ;;
 
   oom)
-    MB="${OOM_MB:-256}"
+    # ⚠️ 实测：bash 的命令替换在拼接大字符串时会 realloc，
+    # 瞬时峰值约为目标值的 **1.9 倍**（实测 90MB 负载 → 峰值 173MB）。
+    # 所以要让演示正确工作，必须让"峰值"落在两个上限之间：
+    #   64Mi (67MB)  → 必须被杀   → 峰值 > 67MB
+    #   128Mi (134MB) → 必须存活  → 峰值 < 134MB
+    # OOM_MB=50 → 峰值约 96MB，两边都留有余量。
+    MB="${OOM_MB:-50}"
     startup
     log "INFO  warming up local cache"
     noise
@@ -72,9 +78,22 @@ case "$MODE" in
               | head -c $((MB * 1000000)))
     log "INFO  GET /api/v1/orders 200 18ms user=U8830"
     log "INFO  cache warmup complete"
-    # 保住 payload 不被优化掉，然后挂住等内核来杀
+    # 保住 payload 不被优化掉：内存必须**一直占着**，
+    # 否则 GC/释放之后就测不出"上限不够"这件事了。
     printf '%s' "${#payload}" >/dev/null
-    sleep 3600
+
+    # ⚠️ 这里必须真的开始服务，不能 `sleep 3600`。
+    #
+    # 曾经写的是 sleep 3600，导致一个很隐蔽的问题：
+    # 内存上限够的时候，分配成功了，但服务**永远不启动** → 就绪探针永远失败
+    # → Pod 一直是 0/1。于是"把内存上限调高"这个修复动作**永远修不好演示故障**，
+    # 用户看到"执行成功"却发现服务依然不可用。
+    #
+    # 正确语义应该是：
+    #   上限不足 → 分配时被 OOMKill（137）
+    #   上限足够 → 分配成功并正常提供服务（Ready）
+    log "INFO  ready to serve traffic"
+    serve_forever
     ;;
 
   crash)
