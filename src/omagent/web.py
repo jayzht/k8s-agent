@@ -426,7 +426,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
         try:
-            if path in ("/", "/index.html"):
+            # `/` 走**简化演示页**（面向第一次接触运维的人），
+            # 原来的高密度运维台移到 `/pro`。两个都保留：
+            # 演示要的是"看懂"，日常用要的是"信息全"。
+            if path in ("/", "/index.html", "/simple"):
+                return self._static("simple.html")
+            if path in ("/pro", "/pro/"):
                 return self._static("index.html")
             if path.startswith("/static/"):
                 return self._static(path[len("/static/") :])

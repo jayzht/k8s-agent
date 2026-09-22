@@ -210,12 +210,32 @@ def _post(url, payload):
         return e.code, json.loads(e.read())
 
 
-def test_serves_index_and_assets(server):
+def test_root_serves_simple_demo_page(server):
+    """`/` 必须是**简化演示页**——面向第一次接触运维的人，单栏向导式。"""
     code, body = _get(server + "/")
+    assert code == 200
+    assert "运维 Agent 演示".encode() in body
+    # 简化页应尽量少用术语；这几个词不该出现在首屏
+    for jargon in ("Tier", "熔断", "哈希链", "命名空间白名单"):
+        assert jargon.encode() not in body, f"简化页不该出现术语：{jargon}"
+
+
+def test_pro_route_serves_full_console(server):
+    """完整运维台移到 /pro，信息密度高但面向懂行的人。"""
+    code, body = _get(server + "/pro")
     assert code == 200 and b"O&amp;M Agent" in body
-    for asset in ("app.js", "style.css"):
-        code, body = _get(f"{server}/static/{asset}")
-        assert code == 200 and len(body) > 100
+    for asset in ("app.js", "style.css", "simple.js", "simple.css"):
+        code, body2 = _get(f"{server}/static/{asset}")
+        assert code == 200 and len(body2) > 100, asset
+
+
+def test_simple_page_is_self_contained(server):
+    """简化页只能依赖自己的 css/js，不该引入外部 CDN。"""
+    code, body = _get(server + "/")
+    html = body.decode()
+    assert "http://" not in html.replace("http://www.w3.org", "")
+    assert "https://" not in html
+    assert "/static/simple.css" in html and "/static/simple.js" in html
 
 
 def test_static_path_traversal_is_blocked(server):

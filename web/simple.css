@@ -1,0 +1,169 @@
+/* 简化版演示页：单栏、大字号、大间距、一次只做一件事。
+   刻意不复用 style.css —— 那套是为高密度运维台设计的，
+   这里的目标读者是第一次接触运维的人，宁可屏幕上东西少。 */
+
+:root {
+  --bg: #0f1216;
+  --card: #171c23;
+  --line: #262d38;
+  --text: #e8edf4;
+  --muted: #8b98a9;
+  --accent: #3d8bfd;
+  --green: #2ea043;
+  --red: #f85149;
+  --amber: #d29922;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+header { max-width: 720px; margin: 0 auto; padding: 56px 24px 8px; }
+header h1 { margin: 0; font-size: 30px; letter-spacing: -.01em; }
+header .sub { margin: 8px 0 0; color: var(--muted); font-size: 15px; }
+
+main { max-width: 720px; margin: 0 auto; padding: 16px 24px 80px; }
+
+/* ── 步骤卡片 ─────────────────────────────────────── */
+.step {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; padding: 24px; margin-top: 20px;
+}
+.step-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 18px; }
+.step-head .num {
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  background: var(--accent); color: #fff; font-weight: 700; font-size: 15px;
+  display: flex; align-items: center; justify-content: center;
+}
+.step-head h2 { margin: 3px 0 0; font-size: 19px; }
+.step-head p { margin: 4px 0 0; font-size: 14px; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+
+/* ── 按钮 ─────────────────────────────────────────── */
+.choice {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: #1d232c; border: 1px solid var(--line); border-radius: 11px;
+  padding: 16px 18px; margin-bottom: 10px; color: var(--text);
+  font: inherit; transition: .13s;
+}
+.choice:hover { border-color: var(--accent); background: #212936; transform: translateX(2px); }
+.choice b { display: block; font-size: 16px; margin-bottom: 3px; }
+.choice span { color: var(--muted); font-size: 13.5px; }
+
+.primary, .ghost {
+  font: inherit; cursor: pointer; border-radius: 10px; padding: 14px 22px;
+  border: 1px solid transparent; font-size: 16px; font-weight: 600; transition: .13s;
+}
+.primary { background: var(--accent); color: #fff; width: 100%; }
+.primary:hover { background: #5b9dff; }
+.primary:disabled { background: #2b3440; color: var(--muted); cursor: not-allowed; }
+.ghost { background: transparent; border-color: var(--line); color: var(--text); }
+.ghost:hover { border-color: var(--muted); }
+.actions { display: flex; gap: 10px; margin-top: 18px; }
+.actions .primary { width: auto; flex: 1; }
+.actions .ghost { flex: none; }
+
+.link {
+  background: none; border: none; color: var(--accent); cursor: pointer;
+  font: inherit; font-size: 14px; padding: 8px 0; text-decoration: none;
+}
+.link:hover { text-decoration: underline; }
+
+/* ── 结论 ─────────────────────────────────────────── */
+.verdict {
+  font-size: 20px; font-weight: 700; padding: 16px 18px;
+  border-radius: 11px; margin-bottom: 14px; line-height: 1.5;
+}
+.verdict.bad  { background: #f8514918; border-left: 4px solid var(--red); }
+.verdict.warn { background: #d2992218; border-left: 4px solid var(--amber); }
+.verdict.good { background: #2ea04318; border-left: 4px solid var(--green); }
+
+.conclusion { font-size: 15px; line-height: 1.85; white-space: pre-wrap; }
+.conclusion code, .evidence code {
+  background: #0d1116; padding: 2px 6px; border-radius: 5px; font-size: 13.5px;
+}
+
+.evidence { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 14px; }
+.ev { padding: 10px 0; border-bottom: 1px solid #1e242c; font-size: 14px; }
+.ev:last-child { border-bottom: none; }
+.ev .ref { color: var(--accent); font-family: ui-monospace, monospace; font-size: 13px; }
+.ev .det { color: var(--muted); margin-top: 3px; }
+
+/* ── 方案 ─────────────────────────────────────────── */
+.plan-title { font-size: 17px; font-weight: 700; margin: 0 0 4px; }
+.plan-sub { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+.tbl td { padding: 9px 0; border-bottom: 1px solid #1e242c; vertical-align: top; }
+.tbl td:first-child { color: var(--muted); width: 130px; }
+.tbl tr:last-child td { border-bottom: none; }
+
+.blocked {
+  background: #f8514918; border: 1px solid #f8514955; border-left: 4px solid var(--red);
+  border-radius: 10px; padding: 16px 18px; margin-bottom: 16px;
+}
+.blocked .t { font-weight: 700; color: #ff9c96; margin-bottom: 6px; }
+
+.warn {
+  background: #d2992215; border: 1px solid #d2992244; border-radius: 10px;
+  padding: 13px 16px; margin-bottom: 14px; font-size: 14px; color: #f0d089;
+}
+
+/* ── 结果 ─────────────────────────────────────────── */
+.outcome { border-radius: 12px; padding: 22px; font-size: 17px; font-weight: 600; }
+.outcome.ok   { background: #2ea04318; border: 1px solid #2ea04355; }
+.outcome.fail { background: #f8514918; border: 1px solid #f8514955; }
+.outcome .detail {
+  font-weight: 400; font-size: 14.5px; color: var(--muted); margin-top: 10px;
+  white-space: pre-wrap; font-family: ui-monospace, monospace;
+}
+
+/* ── 杂项 ─────────────────────────────────────────── */
+.foot { color: var(--muted); font-size: 14px; margin-top: 28px; text-align: center; }
+.foot a { color: var(--accent); }
+
+.spinner {
+  display: inline-block; width: 15px; height: 15px; vertical-align: -2px;
+  border: 2px solid #ffffff44; border-top-color: #fff; border-radius: 50%;
+  animation: spin .7s linear infinite; margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.toast {
+  position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%);
+  background: #222a35; border: 1px solid var(--line); border-radius: 10px;
+  padding: 13px 20px; font-size: 15px; box-shadow: 0 8px 28px #0008; z-index: 99;
+}
+.toast.err { border-color: var(--red); color: #ff9c96; }
+
+@media (max-width: 560px) {
+  header { padding-top: 36px; }
+  header h1 { font-size: 24px; }
+  .step { padding: 18px; }
+  .actions { flex-direction: column; }
+  .actions .primary, .actions .ghost { width: 100%; }
+}
+
+/* 走完的步骤自动收起成一行——否则滚到第 4 步时，第 1 步的按钮还占半屏 */
+.step.done { padding: 14px 24px; opacity: .55; }
+.step.done .choices,
+.step.done .primary,
+.step.done .warn,
+.step.done .ghost,
+.step.done .step-head p,
+.step.done > .muted { display: none; }
+.step.done .step-head { margin-bottom: 0; align-items: center; }
+.step.done .step-head .num { width: 22px; height: 22px; font-size: 12px; background: var(--green); }
+.step.done .step-head h2 { font-size: 15px; font-weight: 600; }
+.step.done .step-head h2::before { content: "✅ "; }
+
+/* 证据里的日志：等宽、可滚动、不要把整个页面撑爆 */
+.ev .det.log {
+  font-family: ui-monospace, monospace; font-size: 12.5px; line-height: 1.6;
+  white-space: pre-wrap; background: #0d1116; border-radius: 7px;
+  padding: 10px 12px; margin-top: 6px; max-height: 190px; overflow: auto;
+  color: #b9c4d4;
+}
