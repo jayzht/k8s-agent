@@ -28,7 +28,13 @@ COPY scripts/ ./scripts/
 # 运行期写入的东西（会话 / 审计 / 用户库 / 案例库）全在 $OMAGENT_HOME/var 下。
 # 见 omagent/config.py 里关于 ROOT 的说明——不设这个变量的话，
 # pip 安装后 ROOT 会落到 site-packages，非 root 根本写不进去。
+# KUBECONFIG 给一个默认值，指向文档里让你挂载的那个路径。
+# 这样 README 里那条 docker run 就是**真的能跑**的——之前它挂了 kubeconfig
+# 却没设这个变量，于是去找 in-cluster 凭据并报 "Service host/port is not set"。
+# 集群内部署（走 ServiceAccount）不受影响：K8sClient 发现该路径不存在时
+# 会自动回退到 in-cluster 凭据。
 ENV OMAGENT_HOME=/data \
+    KUBECONFIG=/kubeconfig/config \
     PYTHONUNBUFFERED=1
 RUN mkdir -p /data && chown -R omagent:omagent /data /app
 

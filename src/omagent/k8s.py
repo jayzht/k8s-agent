@@ -157,15 +157,37 @@ class K8sClient:
         self._load()
 
     def _load(self) -> None:
+        """按"显式指定 → in-cluster → 默认 ~/.kube/config"的顺序加载凭据。
+
+        为什么 KUBECONFIG 指向的文件不存在时**不直接报错**：容器镜像里
+        `KUBECONFIG` 有个默认值 `/kubeconfig/config`（对应文档里让你挂载的路径）。
+        但同一个镜像也可能被部署成 Pod、走 ServiceAccount。那种场景下这个路径
+        不存在，硬报错就会让"集群内跑"这个用法彻底不可用。
+
+        踩过的坑：文档里那条 `docker run` 挂了 kubeconfig 却没设 `KUBECONFIG`，
+        于是走了 in-cluster 分支并报 "Service host/port is not set"——
+        挂载是对的，缺的只是一句话。现在两头都兜住了。
+        """
         try:
-            if self.kubeconfig:
+            if self.kubeconfig and os.path.exists(self.kubeconfig):
                 config.load_kube_config(config_file=self.kubeconfig, context=self.context)
+            elif self.kubeconfig:
+                # 指定了但文件不在：优先当"集群内部署"处理，其次才是默认路径
+                if not self._load_incluster_or_default():
+                    raise K8sUnavailable(
+                        f"KUBECONFIG 指向 {self.kubeconfig}，但文件不存在；"
+                        "也不在集群内（没有 service account）。"
+                        "要么把 kubeconfig 挂到那个路径，要么改成正确的路径。"
+                    )
             else:
-                try:
-                    config.load_incluster_config()
-                except config.ConfigException:
-                    config.load_kube_config(context=self.context)
+                if not self._load_incluster_or_default():
+                    raise K8sUnavailable(
+                        "找不到任何集群凭据：没设 KUBECONFIG、不在集群内、"
+                        "~/.kube/config 也不存在。"
+                    )
             self._loaded = True
+        except K8sUnavailable:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise K8sUnavailable(f"无法加载 kubeconfig: {exc}") from exc
 
@@ -184,6 +206,20 @@ class K8sClient:
         self.authz = client.AuthorizationV1Api()
 
     # ------------------------------------------------------------------ 探活
+
+    @staticmethod
+    def _load_incluster_or_default() -> bool:
+        """先试集群内凭据，再试 ~/.kube/config。成功返回 True。"""
+        try:
+            config.load_incluster_config()
+            return True
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            config.load_kube_config()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def ping(self) -> tuple[bool, str]:
         try:
