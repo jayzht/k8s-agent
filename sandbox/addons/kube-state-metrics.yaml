@@ -1,0 +1,185 @@
+# kube-state-metrics —— 把 K8s 对象状态翻译成指标。
+#
+# 为什么这是三件套里最重要的一件：
+#   Prometheus 原生抓的 cAdvisor/kubelet 指标只告诉你"CPU、内存、网络"，
+#   它**不知道 Deployment 期望几个副本、Pod 重启过几次、容器为什么没就绪**。
+#   排障时真正被引用的 kube_pod_container_status_restarts_total、
+#   kube_deployment_status_replicas_available、kube_pod_status_phase
+#   全部来自 kube-state-metrics。没有它，Prometheus 就只是个大号 top。
+#
+# 镜像：本环境访问不了 registry.k8s.io，由 install-monitoring.sh 经华为云镜像站
+#       拉取后 kind load 进节点。
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: kube-state-metrics
+    app.kubernetes.io/part-of: om-monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: om-monitoring-kube-state-metrics
+  labels:
+    app.kubernetes.io/name: kube-state-metrics
+    app.kubernetes.io/part-of: om-monitoring
+rules:
+# 核心对象：Pod 重启/状态、Service、PVC…… 全部来自这里。
+- apiGroups: [""]
+  resources:
+  - configmaps
+  - endpoints
+  - limitranges
+  - namespaces
+  - nodes
+  - persistentvolumeclaims
+  - persistentvolumes
+  - pods
+  - replicationcontrollers
+  - resourcequotas
+  - secrets
+  - serviceaccounts
+  - services
+  verbs: [list, watch]
+- apiGroups: [apps]
+  resources: [daemonsets, deployments, replicasets, statefulsets]
+  verbs: [list, watch]
+- apiGroups: [batch]
+  resources: [cronjobs, jobs]
+  verbs: [list, watch]
+- apiGroups: [autoscaling]
+  resources: [horizontalpodautoscalers]
+  verbs: [list, watch]
+- apiGroups: [policy]
+  resources: [poddisruptionbudgets]
+  verbs: [list, watch]
+- apiGroups: [networking.k8s.io]
+  resources: [ingresses, networkpolicies]
+  verbs: [list, watch]
+- apiGroups: [discovery.k8s.io]
+  resources: [endpointslices]
+  verbs: [list, watch]
+- apiGroups: [storage.k8s.io]
+  resources: [storageclasses, volumeattachments]
+  verbs: [list, watch]
+- apiGroups: [certificates.k8s.io]
+  resources: [certificatesigningrequests]
+  verbs: [list, watch]
+- apiGroups: [admissionregistration.k8s.io]
+  resources: [mutatingwebhookconfigurations, validatingwebhookconfigurations]
+  verbs: [list, watch]
+- apiGroups: [coordination.k8s.io]
+  resources: [leases]
+  verbs: [list, watch]
+# KSM 启动时会做一次自检（tokenreviews/subjectaccessreviews），缺了会一直报错。
+- apiGroups: [authentication.k8s.io]
+  resources: [tokenreviews]
+  verbs: [create]
+- apiGroups: [authorization.k8s.io]
+  resources: [subjectaccessreviews]
+  verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: om-monitoring-kube-state-metrics
+  labels:
+    app.kubernetes.io/name: kube-state-metrics
+    app.kubernetes.io/part-of: om-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: om-monitoring-kube-state-metrics
+subjects:
+- kind: ServiceAccount
+  name: kube-state-metrics
+  namespace: monitoring
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: kube-state-metrics
+    app.kubernetes.io/part-of: om-monitoring
+spec:
+  selector:
+    app.kubernetes.io/name: kube-state-metrics
+  ports:
+  - name: http-metrics
+    port: 8080
+    targetPort: http-metrics
+    protocol: TCP
+  - name: telemetry
+    port: 8081
+    targetPort: telemetry
+    protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: kube-state-metrics
+    app.kubernetes.io/part-of: om-monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-state-metrics
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kube-state-metrics
+        app.kubernetes.io/part-of: om-monitoring
+    spec:
+      serviceAccountName: kube-state-metrics
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: kube-state-metrics
+        image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - --port=8080
+        - --telemetry-port=8081
+        ports:
+        - name: http-metrics
+          containerPort: 8080
+          protocol: TCP
+        - name: telemetry
+          containerPort: 8081
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: telemetry
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /livez
+            port: telemetry
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true

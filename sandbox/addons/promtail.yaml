@@ -1,0 +1,229 @@
+# promtail —— 把节点上的容器日志推给 Loki（DaemonSet，每个节点一个）。
+#
+# 为什么需要它：
+#   Loki 自己不采集日志，没有 promtail 的话 /loki/api/v1/query_range 永远是空的。
+#   observability 里那个 log-collector DaemonSet 是仿真的（om-demo-app:1），
+#   它不推任何东西，所以不能拿它当采集器用。
+#
+# 采什么：
+#   宿主机 /var/log/pods 下 kubelet 写的容器日志（kind 节点用 containerd，
+#   日志就在这个目录，格式是 CRI）。用 relabel 只保留
+#   demo / staging / observability 三个命名空间，把 kube-system 之类的噪音挡掉。
+#
+# 只采本节点的日志：
+#   走 `-config.expand-env=true` + 环境变量 HOSTNAME（来自 downward API 的
+#   spec.nodeName），在 relabel 里 keep 掉不在本节点的 Pod。
+#   这是 grafana/promtail helm chart 的标准做法——注意 expand-env 只展开 ${VAR}，
+#   不会破坏 __path__ 里的 $1 捕获引用（已实测确认）。
+#
+# 镜像：本环境访问不了 Docker Hub，由 install-monitoring.sh 经华为云镜像站
+#       拉取后 kind load 进节点。
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: promtail
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: om-monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: om-monitoring-promtail
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: om-monitoring
+rules:
+- apiGroups: [""]
+  resources: [nodes, nodes/proxy, services, endpoints, pods, namespaces]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: om-monitoring-promtail
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: om-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: om-monitoring-promtail
+subjects:
+- kind: ServiceAccount
+  name: promtail
+  namespace: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: om-monitoring
+data:
+  promtail-config.yaml: |
+    server:
+      http_listen_port: 3101
+      grpc_listen_port: 0
+      log_level: info
+
+    # 每个 promtail 实例自己的读取位点，Pod 重建后从头采（沙箱可接受）
+    positions:
+      filename: /run/promtail/positions.yaml
+
+    clients:
+      - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+        backoff_config:
+          min_period: 500ms
+          max_period: 5m
+          max_retries: 10
+        # 单副本 Loki 刚起来时可能还没 Ready，多给点耐心
+        timeout: 10s
+
+    scrape_configs:
+      - job_name: kubernetes-pods
+        # containerd/CRI 的日志格式：<time> <stream> <flags> <content>
+        pipeline_stages:
+          - cri: {}
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          # 1) 只采这三个命名空间（题目要求；也顺手挡掉 kube-system 的噪音）
+          - source_labels: [__meta_kubernetes_namespace]
+            regex: demo|staging|observability
+            action: keep
+
+          # 2) 只采调度到本节点的 Pod —— HOSTNAME 由 downward API 注入为 spec.nodeName
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            regex: '${HOSTNAME}'
+            action: keep
+
+          # 3) 只采真的起来了的容器（有 containerID），跳过 Pending/Init 阶段
+          - source_labels: [__meta_kubernetes_pod_container_id]
+            regex: '.+'
+            action: keep
+
+          # 4) kubelet 在磁盘上的真实路径是
+          #      /var/log/pods/<namespace>_<pod>_<uid>/<container>/N.log
+          #    Pod 名可能被截断，所以用 uid 通配前缀，只精确指定 uid 和容器名。
+          - source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
+            separator: /
+            target_label: __path__
+            replacement: /var/log/pods/*$1/*.log
+
+          # 5) 打上排障要用的标签（Loki 的查询也主要靠这几个）
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_pod_controller_name]
+            target_label: controller
+          # app / app_kubernetes_io_name 之类的业务标签一并带上
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: om-monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: promtail
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: promtail
+        app.kubernetes.io/part-of: om-monitoring
+    spec:
+      serviceAccountName: promtail
+      # 5 个节点（含 control-plane）都要有，否则那个节点的日志就断了
+      tolerations:
+      - operator: Exists
+      containers:
+      - name: promtail
+        image: grafana/promtail:3.2.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - -config.file=/etc/promtail/promtail-config.yaml
+        # 没有这行 ${HOSTNAME} 不会被展开，"只采本节点"的过滤会静默失效
+        - -config.expand-env=true
+        env:
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        ports:
+        - name: http
+          containerPort: 3101
+          protocol: TCP
+        # ⚠️ 这里刻意**不用** promtail 的 /ready 做就绪探针。
+        # /ready 的语义是"已经找到至少一个可以 tail 的日志文件"，而不是"进程正常"。
+        # 我们只采 demo/staging/observability 三个命名空间，而演示负载全在 4 个
+        # worker 上，control-plane 节点上一条这类日志都没有 —— 于是那里的 promtail
+        # 会永远 /ready 返回 500（Not ready: Unable to find any logs to tail），
+        # DaemonSet 永远收敛不了。用 tcpSocket 只探进程是否还在服务，语义才对。
+        livenessProbe:
+          tcpSocket:
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          failureThreshold: 6
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          # 需要读宿主机的 /var/log/pods（root 所有），所以不降权、不设只读根
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - name: config
+          mountPath: /etc/promtail
+          readOnly: true
+        - name: positions
+          mountPath: /run/promtail
+        # kubelet 写的容器日志（containerd 运行时）
+        - name: varlogpods
+          mountPath: /var/log/pods
+          readOnly: true
+        # docker 运行时的容器日志目录。
+        # kind 节点用的是 containerd，这个目录通常不存在——用 DirectoryOrCreate
+        # 免得 hostPath 校验失败把 Pod 卡在 ContainerCreating。
+        # 保留这个挂载是为了在换运行时（docker）时同一份清单仍可用。
+        - name: varlibdockercontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: promtail-config
+      - name: positions
+        emptyDir: {}
+      - name: varlogpods
+        hostPath:
+          path: /var/log/pods
+          type: Directory
+      - name: varlibdockercontainers
+        hostPath:
+          path: /var/lib/docker/containers
+          type: DirectoryOrCreate

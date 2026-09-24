@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>O&M Agent · 集群大屏</title>
+<link rel="stylesheet" href="/static/wall.css">
+</head>
+<body>
+<div id="stage">
+<div id="canvas">
+
+<header class="bar">
+  <div class="bar-left">
+    <span class="logo">◈</span>
+    <strong>O&amp;M Agent</strong>
+    <span class="muted" id="cluster-info">连接中…</span>
+  </div>
+  <div class="bar-mid">
+    <span class="pill" id="health-pill">—</span>
+  </div>
+  <div class="bar-right">
+    <span class="muted small" id="updated">—</span>
+    <a class="ghost" href="/" title="打开可交互的监控台">监控台 ↗</a>
+    <button class="ghost" id="btn-full" title="全屏">⛶</button>
+    <span class="clock" id="clock">--:--:--</span>
+  </div>
+</header>
+
+<section class="kpis" id="kpis"></section>
+
+<main class="grid">
+  <section class="panel span2">
+    <h2>工作负载矩阵 <span class="muted small" id="wl-sub"></span></h2>
+    <div class="panel-body" id="workloads"></div>
+  </section>
+
+  <section class="panel">
+    <h2>节点</h2>
+    <div class="panel-body" id="nodes"></div>
+  </section>
+
+  <section class="panel">
+    <h2>告警 <span class="badge" id="alert-count">0</span></h2>
+    <div class="panel-body" id="alerts"></div>
+  </section>
+
+  <section class="panel">
+    <h2>最近处置</h2>
+    <div class="panel-body" id="activity"></div>
+  </section>
+
+  <section class="panel">
+    <h2>已沉淀的处置（语义记忆）</h2>
+    <div class="panel-body" id="cases"></div>
+  </section>
+</main>
+
+</div><!-- /canvas -->
+</div><!-- /stage -->
+
+<div class="login-mask" id="login-mask" hidden>
+  <form class="login-card" id="login-form">
+    <h1>O&amp;M Agent 大屏</h1>
+    <p class="muted small">大屏同样需要登录——它能显示集群的完整状态。</p>
+    <label class="login-field"><span>用户名</span>
+      <input id="login-user" autocomplete="username"></label>
+    <label class="login-field"><span>密码</span>
+      <input id="login-pass" type="password" autocomplete="current-password"></label>
+    <button type="submit" id="login-btn">登录</button>
+    <p class="login-err" id="login-err"></p>
+  </form>
+</div>
+
+<script src="/static/wall.js"></script>
+</body>
+</html>

@@ -1,868 +1,606 @@
-"""命令行入口与演示编排。
+"""命令行入口。
 
-这里最重要的一件东西是**确认卡片**（PRD 5.4）。在 L1 档位下，产品力几乎
-全部体现在这张卡片上：它要在 30 秒内让人敢按下确认键。
+    python -m omagent.cli serve            # 启动监控台（默认）
+    python -m omagent.cli serve --demo     # 带故障注入按钮（演示用）
+    python -m omagent.cli useradd <名字>    # 加一个能批准变更的运维
+    python -m omagent.cli users            # 列出用户
+    python -m omagent.cli tools            # 打印工具清单与读写切分
+    python -m omagent.cli audit            # 校验审计链是否被篡改
+    python -m omagent.cli status           # 打印模型配置状态
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import sys
 from pathlib import Path
-from typing import Any
 
-from rich.console import Console, Group
-from rich.panel import Panel
-from rich.prompt import Confirm
-from rich.rule import Rule
-from rich.table import Table
-from rich.text import Text
+from .config import ROOT, ensure_local_bypass, load_env_file, llm_status
+from .tools import FORBIDDEN, TOOLS
 
-from .agent import TOOLS, OpsAgent, Refusal
-from .audit import AuditLog, new_trace_id
-from .impact import summarise
-from .k8s import K8sClient, K8sUnavailable
-from .models import Decision, Proposal
-from .planner import LLMPlanner, RuleBasedPlanner
+DEFAULT_USERS = ROOT / "var" / "users.json"
 
-console = Console()
-ROOT = Path(__file__).resolve().parents[2]
 
-TIER_STYLE = {"T0": "dim", "T1": "bold green", "T2": "bold yellow", "T3": "bold red"}
-
-
-# ---------------------------------------------------------------------------
-# 确认卡片
-# ---------------------------------------------------------------------------
-
-
-def render_card(prop: Proposal) -> Panel:
-    """渲染确认卡片。字段顺序刻意固定：先结论、再证据、再影响面、最后回滚。"""
-    tier = prop.effective_tier
-    head = Table.grid(padding=(0, 2))
-    head.add_column(style="bold")
-    head.add_column()
-    head.add_row("动作", f"[cyan]{prop.tool}[/cyan]  {prop.params}")
-    head.add_row("目标", str(prop.target))
-    tier_txt = f"[{TIER_STYLE[tier.value]}]{tier.value} {tier.label}[/]"
-    if prop.escalated_to:
-        tier_txt += (
-            f"  [yellow]（由 {prop.tier.value} 升级为 {prop.escalated_to.value}）[/yellow]"
-        )
-    head.add_row("风险等级", tier_txt)
-    head.add_row("确认强度", tier.confirm_strength)
-
-    # --- 为什么要做 ---
-    why = Group(
-        Text(prop.rationale or "（未提供理由）", style="white"),
-        Text(""),
-        *[Text(f"  证据： {e.render()}", style="dim") for e in prop.evidence[:6]],
-    )
-
-    # --- 影响面 ---
-    imp = Table.grid(padding=(0, 2))
-    imp.add_column(style="bold")
-    imp.add_column()
-    for label, value in summarise(prop.impact):
-        imp.add_row(label, value)
-    for note in prop.impact.notes:
-        imp.add_row("", f"[yellow]• {note}[/yellow]")
-
-    # --- dry-run ---
-    if prop.tier.forbidden:
-        # T3 在 propose() 里就短路了，从未进入 dry-run，不能显示成"未通过"
-        dry = Text("— 禁止动作，未进入 dry-run（直接拒绝）", style="red")
-    elif prop.tier.requires_approval:
-        if prop.dry_run_ok:
-            dry = Text(f"✅ 服务端 dry-run 通过 — {prop.dry_run_output}", style="green")
-        else:
-            dry = Text(f"❌ 服务端 dry-run 未通过 — {prop.dry_run_output}", style="red")
-    else:
-        dry = Text("— 只读操作，无需 dry-run", style="dim")
-
-    # --- 回滚 ---
-    rb = Group(
-        Text(prop.rollback or "无自动回滚路径", style="white"),
-        Text(f"预计恢复时间：{prop.rollback_eta}", style="dim"),
-    )
-
-    # --- 熔断 ---
-    if prop.breaches:
-        cb = Group(
-            *[
-                Text(
-                    b.render(),
-                    style={"block": "red", "escalate": "yellow", "warn": "dim"}[b.severity],
-                )
-                for b in prop.breaches
-            ]
-        )
-    else:
-        cb = Text("✅ 全部熔断检查通过", style="green")
-
-    body = Group(
-        Rule("[bold]建议动作[/bold]", align="left"),
-        head,
-        Rule("[bold]为什么要做[/bold]", align="left"),
-        why,
-        Rule("[bold]影响面[/bold]", align="left"),
-        imp,
-        Rule("[bold]dry-run 校验[/bold]", align="left"),
-        dry,
-        Rule("[bold]回滚[/bold]", align="left"),
-        rb,
-        Rule("[bold]熔断检查[/bold]", align="left"),
-        cb,
-    )
-
-    status = "blocked" if prop.blocked else ("needs-approval" if prop.requires_approval else "auto")
-    border = {"blocked": "red", "needs-approval": "yellow", "auto": "green"}[status]
-    title = {
-        "blocked": "⛔ 方案已被熔断拦截",
-        "needs-approval": "⚠️ 待人工确认",
-        "auto": "✅ 只读操作已自动执行",
-    }[status]
-    return Panel(body, title=title, border_style=border, padding=(1, 2))
-
-
-# ---------------------------------------------------------------------------
-# 确认器
-# ---------------------------------------------------------------------------
-
-
-class CLIConfirmer:
-    """交互式确认：渲染卡片，等人按 y。"""
-
-    def __init__(self, operator: str):
-        self.operator = operator
-
-    def confirm(self, prop: Proposal) -> Decision:
-        console.print()
-        console.print(render_card(prop))
-        console.print()
-        if prop.blocked:
-            console.print("[red]该方案已被熔断规则拦截，无法执行。[/red]")
-            return Decision(prop.proposal_id, False, self.operator, "熔断拦截")
-        if not prop.requires_approval:
-            return Decision(prop.proposal_id, True, self.operator, "只读操作自动放行")
-
-        strength = prop.effective_tier.confirm_strength
-        if strength == "strong":
-            console.print("[yellow]这是中危操作，需要填写变更理由。[/yellow]")
-        ok = Confirm.ask(
-            f"[bold]确认执行 {prop.tool} → {prop.target} ?[/bold]", default=False
-        )
-        reason = ""
-        if ok and strength == "strong":
-            from rich.prompt import Prompt
-
-            reason = Prompt.ask("变更理由（会写入审计日志）")
-        return Decision(prop.proposal_id, ok, self.operator, reason or ("人工确认" if ok else "人工取消"))
-
-
-class AutoConfirmer:
-    """演示用：预设裁决，模拟某个操作人。"""
-
-    def __init__(self, operator: str, approve: bool = True, reason: str = "演示脚本自动确认"):
-        self.operator = operator
-        self.approve = approve
-        self.reason = reason
-
-    def confirm(self, prop: Proposal) -> Decision:
-        console.print()
-        console.print(render_card(prop))
-        console.print()
-        return Decision(prop.proposal_id, self.approve, self.operator, self.reason)
-
-
-# ---------------------------------------------------------------------------
-# 诊断结果渲染
-# ---------------------------------------------------------------------------
-
-
-def render_diagnosis(diag) -> None:
-    conf_style = {"high": "green", "medium": "yellow", "low": "red"}.get(diag.confidence, "white")
-    console.print(
-        Panel(
-            Text(diag.conclusion, style="white"),
-            title=f"🔍 诊断结论  [dim]signature={diag.matched_signature}[/dim]",
-            subtitle=f"置信度 [{conf_style}]{diag.confidence}[/]",
-            border_style="blue",
-        )
-    )
-    if diag.evidence:
-        t = Table(title="证据链", show_header=True, header_style="bold")
-        t.add_column("#", style="dim", width=3)
-        t.add_column("类型", width=8)
-        t.add_column("对象")
-        t.add_column("内容")
-        for i, e in enumerate(diag.evidence, 1):
-            t.add_row(str(i), e.kind, e.ref, e.detail[:160])
-        console.print(t)
-    for f in diag.findings:
-        console.print(f"  [dim]• {f}[/dim]")
-    if diag.candidates:
-        t = Table(title="候选处置动作", show_header=True, header_style="bold")
-        t.add_column("#", style="dim", width=3)
-        t.add_column("动作")
-        t.add_column("理由")
-        t.add_column("备注", style="yellow")
-        for i, c in enumerate(diag.candidates, 1):
-            t.add_row(str(i), c.tool, c.rationale[:90], c.note[:80])
-        console.print(t)
-
-
-def render_refusal(r: Refusal) -> None:
-    console.print(
-        Panel(
-            Text(r.render(), style="red"),
-            title="⛔ 请求被拒绝",
-            border_style="red",
-            padding=(1, 2),
-        )
-    )
-
-
-# ---------------------------------------------------------------------------
-# 命令
-# ---------------------------------------------------------------------------
-
-
-def build_agent(args) -> tuple[OpsAgent, AuditLog]:
-    k8s = K8sClient(kubeconfig=args.kubeconfig)
-    from .policy import Policy
-
-    policy = Policy(args.policy) if args.policy else Policy()
-    audit = AuditLog(args.audit)
-    agent = OpsAgent(
-        k8s, policy, audit, operator=args.operator, dry_run_only=args.read_only
-    )
-    return agent, audit
-
-
-def cmd_status(args) -> int:
-    # 先展示 LLM 配置：集群连不上时，这恰恰是最需要看到的信息
-    from .config import llm_status
-
-    st = llm_status()
-    flag = (
-        "[green]可用[/green]"
-        if st["available"] == "是"
-        else "[yellow]不可用（诊断将降级到规则引擎）[/yellow]"
-    )
-    console.print(f"LLM 规划器：{flag}")
-    console.print(f"  base_url = {st['base_url']}")
-    console.print(f"  model    = {st['model']}")
-    console.print(f"  api_key  = {st['api_key']}   [dim]（仅显示前缀，不泄露完整密钥）[/dim]")
-
-    try:
-        agent, _ = build_agent(args)
-    except K8sUnavailable as exc:
-        console.print(f"[red]集群不可达：{exc}[/red]")
-        return 2
-    ok, info = agent.cluster_status()
-    console.print(f"集群连接：{'✅' if ok else '❌'} {info}")
-
-    import json
-
-    desc = agent.describe_self()
-    console.print(
-        Panel(
-            json.dumps(desc["policy"], indent=2, ensure_ascii=False)[:2600],
-            title="当前生效的安全策略",
-            border_style="blue",
-        )
-    )
-    return 0
-
-
-def cmd_diagnose(args) -> int:
-    ns, name = (
-        args.target.split("/", 1) if "/" in args.target else ("demo", args.target)
-    )
-    return run_diagnosis(args, ns, name, args.kind, use_llm=args.llm)
-
-
-def cmd_ask(args) -> int:
-    """自然语言入口：先解析意图，再走与 diagnose 完全相同的链路。"""
-    from .intent import IntentParser, IntentUnresolved
-
-    try:
-        agent, _ = build_agent(args)
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]集群不可达：{exc}[/red]")
-        return 2
-
-    parser = IntentParser(agent.k8s, agent.policy)
-    try:
-        intent = parser.parse(args.text, args.namespace or "")
-    except IntentUnresolved as exc:
-        console.print(Panel(f"[yellow]{exc}[/yellow]", title="🤔 无法确定你要诊断什么",
-                            border_style="yellow"))
-        return 2
-
-    console.print(
-        f"🧭 [bold]{intent.interpretation}[/bold]  "
-        f"[dim](来源={intent.source}，置信度={intent.confidence})[/dim]"
-    )
-    # 意图解析只产出结构化参数；后续链路与 diagnose 完全相同（含所有安全门禁）
-    return run_diagnosis(
-        args, intent.namespace, intent.workload, intent.kind,
-        use_llm=(intent.planner == "llm" or args.llm), turns=intent.turns,
-    )
-
-
-def run_diagnosis(
-    args, ns: str, name: str, kind: str, *, use_llm: bool = False, turns: int = 1
-) -> int:
-    """诊断主流程（diagnose 与 ask 共用，避免两条路径行为漂移）。"""
-    agent, audit = build_agent(args)
-    planner = LLMPlanner(agent.k8s) if use_llm else RuleBasedPlanner(agent.k8s)
-    trace = new_trace_id()
-
-    audit.log_intent(trace, args.operator, f"诊断 {kind}/{name} @ {ns}")
-    if turns > 1:
-        from .loop import AgentLoop
-
-        run = AgentLoop(planner, agent, max_turns=turns).run(ns, name, kind)
-        diag = run.diagnosis
-        if run.turns:
-            console.print(
-                f"[dim]多轮取证：共 {run.rounds} 轮、{len(run.turns)} 次只读动作"
-                f"（{run.stopped_reason}）[/dim]"
-            )
-        assert diag is not None
-    else:
-        diag = planner.diagnose(ns, name, kind)
-
-    # --- 知识沉淀：先查历史同类故障 ---
-    from .knowledge import KnowledgeStore, extract_keywords
-
-    kb = KnowledgeStore(args.knowledge)
-    evidence_text = " ".join(f"{e.ref} {e.detail}" for e in diag.evidence)
-    kw = extract_keywords(evidence_text)
-    hint = kb.hint_for(diag.matched_signature, kw, name)
-    if hint:
-        diag.findings.append(f"📚 {hint}")
-
-    audit.log_diagnosis(
-        trace, args.operator, diag.conclusion, [e.to_dict() for e in diag.evidence]
-    )
-    render_diagnosis(diag)
-
-    if not args.execute or not diag.candidates:
-        return 0
-
-    pick = args.pick
-    if pick is None:
-        from rich.prompt import IntPrompt
-
-        pick = IntPrompt.ask(
-            "选择要执行的候选动作编号（0 = 不执行）", default=0
-        )
-    if not pick:
-        console.print("[dim]已取消，未执行任何动作。[/dim]")
-        return 0
-
-    cand = diag.candidates[pick - 1]
-    prop = agent.propose(
-        cand.tool, cand.params, rationale=cand.rationale, evidence=diag.evidence, trace_id=trace
-    )
-    confirmer = CLIConfirmer(args.operator)
-    decision = confirmer.confirm(prop)
-    audit.log_decision(trace, decision)
-    res = agent.execute(prop, decision, trace_id=trace)
-    console.print(f"执行结果：[bold]{res.status}[/bold] {res.output or res.error} ({res.duration_ms}ms)")
-
-    # --- 知识沉淀：把本次「症状→根因→处置→结果」落库 ---
-    kb.record_from_diagnosis(
-        namespace=ns,
-        workload=name,
-        kind=kind,
-        signature=diag.matched_signature,
-        conclusion=diag.conclusion,
-        evidence_text=evidence_text,
-        treatment=f"{cand.tool} {cand.params}",
-        treatment_tier=prop.effective_tier.value,
-        outcome=res.status,
-        outcome_note=res.output or res.error,
-        operator=args.operator,
-    )
-    return 0
-
-
-def cmd_refuse(args) -> int:
-    agent, _ = build_agent(args)
-    render_refusal(agent.refuse(args.request, args.rule))
-    return 0
-
-
-def cmd_demo(args) -> int:
-    agent, audit = build_agent(args)
-    from .demo import run_demo
-
-    return run_demo(agent, audit, auto=args.auto)
-
-
-def cmd_itbench(args) -> int:
-    """用 ITBench-Lite 的真实 K8s 事故数据评测诊断能力（非自证）。"""
-    from .itbench import REVIEWED_EXPECTATIONS, load_scenario, run_scenario, summarise_results
-
-    base = Path(args.dir)
-    scenes = args.scenarios.split(",") if args.scenarios else sorted(
-        f.stem for f in (base / "gt").glob("*.yaml")
-    )
-    if not scenes:
-        console.print(f"[red]在 {base}/gt 下没找到真值文件。[/red]")
-        return 2
-
-    console.print(f"载入 {len(scenes)} 个 ITBench 场景…")
-    results = []
-    for sid in scenes:
-        with console.status(f"评测 {sid}…"):
-            try:
-                results.append(run_scenario(base, sid))
-            except Exception as exc:  # noqa: BLE001
-                from .itbench import ScenarioResult
-
-                r = ScenarioResult(scn_id=sid)
-                r.error = str(exc)
-                results.append(r)
-
-    t = Table(title="ITBench 真实数据评测", show_header=True, header_style="bold")
-    t.add_column("场景", style="cyan", width=14)
-    t.add_column("判定", width=14)
-    t.add_column("工作负载", width=22)
-    t.add_column("分类（期望→实际）", width=38)
-    style = {"hit": "green", "partial": "yellow", "miss": "red",
-             "undetectable": "dim", "skip": "dim", "error": "red"}
-    for r in results:
-        t.add_row(
-            r.scn_id,
-            f"[{style[r.verdict]}]{r.verdict}[/{style[r.verdict]}]",
-            r.workload or "-",
-            f"{r.signature_expected or '-'} → {r.signature_actual or '-'}",
-        )
-    console.print(t)
-
-    counts = summarise_results(results)
-    console.print()
-    console.print(f"  ✓ 命中        [green]{counts.get('hit', 0)}[/green]")
-    console.print(f"  ◐ 部分正确    [yellow]{counts.get('partial', 0)}[/yellow]")
-    console.print(f"  ✗ 未命中      [red]{counts.get('miss', 0)}[/red]")
-    console.print(f"  · 设计上看不到 {counts.get('undetectable', 0)}")
-    console.print(f"  · 超出能力范围 {counts.get('skip', 0)}")
-
-    graded = [r for r in results if r.verdict in ("hit", "partial", "miss")]
-    if graded:
-        hit = counts.get("hit", 0)
-        console.print(
-            f"\n  可评分场景 {len(graded)} 个，完全命中 **{hit}/{len(graded)}**"
-            f"（{hit/len(graded):.0%}）"
-        )
-    console.print(
-        "\n[dim]注：本评测用真值**指定工作负载**，只评「诊断与处置」这一半；"
-        "不评「从全集群遥测定位根因实体」——那是本项目尚未具备的能力。[/dim]"
-    )
-
-    for r in results:
-        if r.verdict in ("miss", "partial") and r.note:
-            console.print(f"\n[yellow]{r.scn_id}[/yellow] {r.note}")
-            if r.conclusion:
-                console.print(f"  实际结论：{r.conclusion[:180]}")
-    return 0
-
-
-def cmd_fuzz(args) -> int:
-    """用大模型生成规则之外的故障场景，反向测试规则引擎。"""
-    from .fuzz import (
-        FuzzGenerator,
-        FuzzUnavailable,
-        analyse_generated,
-        save_generated,
-        summarise,
-        to_markdown,
-    )
-
-    gen = FuzzGenerator()
-    if not gen.available:
-        console.print(
-            "[red]未配置模型凭据，无法生成场景。[/red]\n"
-            "[dim]在 .env 里设置 DEEPSEEK_API_KEY，或使用 --analyze 只分析已有文件。[/dim]"
-        )
-        return 2
-
-    if args.analyze:
-        import yaml as _yaml
-
-        raw = _yaml.safe_load(Path(args.analyze).read_text(encoding="utf-8")) or []
-        cases = raw if isinstance(raw, list) else raw.get("cases", [])
-        console.print(f"从 {args.analyze} 载入 {len(cases)} 个场景，开始分析…")
-    else:
-        with console.status(f"让模型设计 {args.n} 个规则之外的故障场景…"):
-            try:
-                result = gen.generate(args.n)
-            except FuzzUnavailable as exc:
-                console.print(f"[red]{exc}[/red]")
-                return 2
-        cases = result.cases
-        if not cases:
-            console.print("[yellow]模型没有产出可用场景。[/yellow]")
-            return 1
-        path = save_generated(cases, args.name)
-        console.print(
-            f"✅ 生成 {len(cases)} 个场景 → [cyan]{path}[/cyan]"
-            f"  [dim](模型={result.model}，tokens={result.usage.get('total_tokens', '?')})[/dim]"
-        )
-        console.print("[dim]注：这些用例的期望值是模型假设，需人工复核后才进主用例集。[/dim]")
-
-    spots = analyse_generated(cases)
-    counts = summarise(spots)
-
-    console.print()
-    t = Table(title="规则引擎在新场景上的盲区", show_header=True, header_style="bold")
-    t.add_column("用例", style="cyan", width=24)
-    t.add_column("判定", width=22)
-    t.add_column("标题")
-    for sp in spots:
-        style = {"false_positive": "red", "miss": "yellow",
-                 "unrecognized": "dim", "ok": "green"}[sp.verdict]
-        t.add_row(sp.case_id, f"[{style}]{sp.verdict}[/{style}]", sp.title[:44])
-    console.print(t)
-
-    console.print()
-    console.print(f"  🚨 假阳性提议  [red]{counts.get('false_positive', 0)}[/red]")
-    console.print(f"  ⚠️ 漏报        [yellow]{counts.get('miss', 0)}[/yellow]")
-    console.print(f"  ·  特征未识别  {counts.get('unrecognized', 0)}")
-    console.print(f"  ✓  通过        [green]{counts.get('ok', 0)}[/green]")
-
-    if args.md:
-        Path(args.md).write_text(
-            to_markdown(spots, f"规则引擎盲区报告（{len(cases)} 个生成场景）"),
-            encoding="utf-8",
-        )
-        console.print(f"\n[dim]Markdown 报告已写入 {args.md}[/dim]")
-
-    interesting = [s for s in spots if s.verdict in ("false_positive", "miss")]
-    if interesting:
-        console.print("\n[bold]值得人工复核的线索：[/bold]")
-        for sp in interesting:
-            console.print(sp.render())
-            console.print()
-    return 0
-
-
-def cmd_web(args) -> int:
+def cmd_serve(args: argparse.Namespace) -> int:
     from .web import serve
 
+    load_env_file()
+    ensure_local_bypass()
     serve(
         host=args.host,
         port=args.port,
         operator=args.operator,
-        planner=args.planner,
+        namespace=args.namespace,
         kubeconfig=args.kubeconfig,
-        audit_path=args.audit,
-        knowledge_path=args.knowledge,
-        policy_path=args.policy,
         demo=args.demo,
-        cooldown=args.cooldown,
+        write_namespaces=tuple(args.write_namespaces) if args.write_namespaces else None,
+        model=args.model,
+        users_path=args.users,
+        session_dir=args.session_dir,
+        allow_anonymous=args.allow_anonymous,
+        bootstrap=not args.no_bootstrap,
+        providers_factory=lambda k8s: _build_providers(k8s, args),
     )
     return 0
 
 
-def cmd_knowledge(args) -> int:
-    from .knowledge import KnowledgeStore
+# ---------------------------------------------------------------------------
+# 用户管理
+# ---------------------------------------------------------------------------
 
-    kb = KnowledgeStore(args.knowledge)
-    if args.hint:
-        hint = kb.hint_for(args.hint, [], args.workload or "")
-        console.print(hint or "[dim]没有匹配的历史记录。[/dim]")
+
+def _ask_password(username: str, given: str | None) -> str:
+    if given:
+        return given
+    p1 = getpass.getpass(f"为 {username} 设置密码（至少 8 位）：")
+    p2 = getpass.getpass("再输一遍：")
+    if p1 != p2:
+        raise SystemExit("✗ 两次输入不一致")
+    return p1
+
+
+def cmd_useradd(args: argparse.Namespace) -> int:
+    from .auth import ROLE_LABEL, ROLES, UserStore
+
+    path = Path(args.users) if args.users else DEFAULT_USERS
+    store = UserStore.load(path)
+    if args.name in store.usernames and not args.force:
+        raise SystemExit(f"✗ 用户 {args.name} 已存在（要改密码用 passwd，要重建加 --force）")
+    password = _ask_password(args.name, args.password)
+    store.add(args.name, password, args.role)
+    store.save()
+    print(f"✓ 已写入 {path}")
+    print(f"  {args.name} — {ROLE_LABEL.get(args.role, args.role)}")
+    if args.role == "viewer":
+        print("  提示：viewer 能看、能问，但**不能批准变更**。")
+    return 0
+
+
+def cmd_passwd(args: argparse.Namespace) -> int:
+    from .auth import UserStore
+
+    path = Path(args.users) if args.users else DEFAULT_USERS
+    store = UserStore.load(path)
+    if args.name not in store.usernames:
+        raise SystemExit(f"✗ 用户 {args.name} 不存在")
+    store.set_password(args.name, _ask_password(args.name, args.password))
+    store.save()
+    print(f"✓ 已更新 {args.name} 的密码")
+    return 0
+
+
+def cmd_userdel(args: argparse.Namespace) -> int:
+    from .auth import UserStore
+
+    path = Path(args.users) if args.users else DEFAULT_USERS
+    store = UserStore.load(path)
+    if not store.remove(args.name):
+        raise SystemExit(f"✗ 用户 {args.name} 不存在")
+    store.save()
+    print(f"✓ 已删除 {args.name}")
+    return 0
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    """跑诊断质量评测。**会真调模型、真改集群。**"""
+    from .agent import WRITE_NAMESPACES, OpsAgent
+    from .audit import AuditLog
+    from .cases import CaseStore
+    from .evals import SCENARIOS, dump, render, run, select
+    from .k8s import K8sClient
+    from .llm import LLMClient
+
+    load_env_file()
+    ensure_local_bypass()
+
+    if args.rescore:
+        from .evals import load_report, rescore
+
+        rep = rescore(load_report(args.rescore))
+        print(render(rep))
+        out = args.out or args.rescore
+        dump(rep, out)
+        print(f"\n重判结果：{out}")
         return 0
-    if args.stats or not args.search:
-        import json as _json
 
-        console.print(
-            Panel(
-                _json.dumps(kb.stats(), ensure_ascii=False, indent=2),
-                title="知识库统计",
-                border_style="blue",
+    scenarios = select(args.only)
+    if not scenarios:
+        raise SystemExit(f"✗ 没有匹配的剧本。可选：{', '.join(s.name for s in SCENARIOS)}")
+
+    kubeconfig = args.kubeconfig or str(ROOT / "var" / "kubeconfig")
+    llm = LLMClient(model=args.model)
+    if not llm.available:
+        raise SystemExit("✗ 没配置模型 API Key，评测跑不了（评测必须用真模型）")
+
+    # 案例库单独一份：评测不该污染真实积累的经验
+    eval_cases = ROOT / "var" / "eval-cases.jsonl"
+
+    def agent_factory() -> OpsAgent:
+        return OpsAgent(
+            K8sClient(kubeconfig=kubeconfig),
+            AuditLog(ROOT / "var" / "eval-audit.jsonl"),
+            operator="eval",
+            write_namespaces=WRITE_NAMESPACES,
+            cases=CaseStore(eval_cases),
+        )
+
+    print(f"评测 {len(scenarios)} 个剧本 × {args.repeat} 次，用真模型真集群。")
+    print(f"模型：{llm.model} ｜ 每个剧本开始前恢复基线，结束后再恢复一次。")
+    print("⚠️ 期间请不要同时操作演示集群。\n")
+
+    report = run(scenarios,
+                 agent_factory=agent_factory,
+                 llm_factory=lambda: LLMClient(model=args.model),
+                 repeat=args.repeat,
+                 settle=args.settle,
+                 on_log=lambda m: print(m, flush=True))
+
+    print(render(report))
+    out = args.out or str(ROOT / "var" / "eval-report.json")
+    dump(report, out)
+    print(f"\n完整结果：{out}")
+
+    threshold = args.min_pass
+    if threshold is not None and report["pass_rate"] < threshold:
+        print(f"✗ 通过率 {report['pass_rate'] * 100:.0f}% 低于阈值 {threshold * 100:.0f}%")
+        return 1
+    return 0
+
+
+def cmd_cases(args: argparse.Namespace) -> int:
+    from .cases import CaseStore, describe
+
+    path = Path(args.path) if args.path else (ROOT / "var" / "cases.jsonl")
+    store = CaseStore(path)
+    cases = store.all()
+    if not cases:
+        print(f"案例库：{path}")
+        print("  （空）—— 案例在「人工批准 + 执行成功」之后自动入库。")
+        return 0
+    from .cases import OUTCOME_EFFECTIVE, OUTCOME_INEFFECTIVE
+
+    stats = store.stats()
+    by = stats["by_outcome"]
+    label = {OUTCOME_EFFECTIVE: "已证实有效", OUTCOME_INEFFECTIVE: "回查无效",
+             "applied": "待回查"}
+    print(f"案例库：{path}")
+    print(f"  共 {stats['total']} 条，涉及 {stats['workloads']} 个工作负载")
+    print("  " + " ｜ ".join(f"{label.get(k, k)} {v}" for k, v in sorted(by.items())))
+    print(f"  **可被检索的只有『已证实有效』那 {stats['teachable']} 条**——"
+          f"其它要么还没回查，要么被证明没用")
+    if stats["tools"]:
+        print(f"  出现过的处置：{'、'.join(stats['tools'])}")
+    print()
+    for c in cases[-args.limit:][::-1]:
+        mark = {OUTCOME_EFFECTIVE: "✓", OUTCOME_INEFFECTIVE: "✗"}.get(c.outcome, "…")
+        print(f"  {mark} [{c.ts[:19].replace('T', ' ')}] {c.workload} · {c.tool}"
+              f"  ({label.get(c.outcome, c.outcome)})")
+        print(f"      症状：{describe(c.signature)}")
+        print(f"      理由：{(c.rationale or '')[:90]}")
+        if c.evidence:
+            print(f"      回查：{c.evidence[:90]}")
+        print(f"      批准人：{c.operator}")
+    return 0
+
+
+def cmd_users(args: argparse.Namespace) -> int:
+    from .auth import ROLE_LABEL, UserStore
+
+    path = Path(args.users) if args.users else DEFAULT_USERS
+    store = UserStore.load(path)
+    print(f"用户库：{path}")
+    if len(store) == 0:
+        print("  （空）—— 注意：serve 在没有用户时会**拒绝启动**，")
+        print("   除非显式加 --allow-anonymous（仅限本机一次性演示）。")
+        return 0
+    for u in store.to_dict()["users"]:
+        print(f"  {u['username']:<20} {ROLE_LABEL.get(u['role'], u['role'])}")
+    return 0
+
+
+def cmd_tools(_: argparse.Namespace) -> int:
+    readonly = [t for t in TOOLS.values() if not t.mutating]
+    write = [t for t in TOOLS.values() if t.mutating]
+
+    print(f"\n只读工具（{len(readonly)} 个）—— 自动执行，不需要确认\n")
+    for t in readonly:
+        print(f"  {t.name:<20} {t.summary}")
+    print(f"\n写工具（{len(write)} 个）—— 必须人工批准后才会执行\n")
+    for t in write:
+        print(f"  {t.name:<20} {t.summary}")
+    print(f"\n禁止动作（{len(FORBIDDEN)} 个）—— 不在工具清单里，模型看不见也调不到\n")
+    for name, why in FORBIDDEN.items():
+        print(f"  {name:<20} {why}")
+    print()
+    return 0
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    from .audit import AuditLog
+
+    path = args.path or (ROOT / "var" / "audit.jsonl")
+    audit = AuditLog(path)
+    ok, msg = audit.verify()
+    print(f"审计日志：{path}")
+    print(f"链校验：{'✅ 通过' if ok else '❌ 失败'} — {msg}")
+    return 0 if ok else 1
+
+
+def cmd_status(_: argparse.Namespace) -> int:
+    load_env_file()
+    st = llm_status()
+    print(f"模型接口：{st['base_url']}")
+    print(f"模型名称：{st['model']}")
+    print(f"API Key ：{st['api_key']}")
+    print(f"可用    ：{st['available']}")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """上线前自检：把"跑不起来"的原因在启动之前说清楚。
+
+    存在的理由很直接——这个项目最难的一步不是装依赖，是**权限**。
+    同类 CLI 工具（k8sgpt、kubectl-ai）挂在你已有的 kubeconfig 上就完事，
+    而这个项目要读、还要**写**，所以它需要一份比只读大、比 cluster-admin 小的
+    RBAC。配错了的表现是"页面能打开，但一问就报错"，很难自己查出来。
+
+    所以这里逐项检查，并且**每一项失败都给一条能直接粘的命令**。
+    """
+    from .config import ROOT as _ROOT
+    from .k8s import K8sClient, K8sUnavailable
+
+    load_env_file()
+    results: list[tuple[str, bool, str, str]] = []   # 名称, 通过, 说明, 修复
+
+    def check(name: str, ok: bool, detail: str = "", fix: str = "") -> bool:
+        results.append((name, ok, detail, fix))
+        return ok
+
+    # --- 1. 依赖 -----------------------------------------------------------
+    missing = []
+    for mod in ("kubernetes", "yaml", "requests"):
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(mod)
+    check("Python 依赖", not missing,
+          "、".join(missing) + " 导入失败" if missing else "kubernetes / pyyaml / requests 就绪",
+          "bash scripts/setup-python.sh")
+
+    # --- 2. kubeconfig -----------------------------------------------------
+    import os as _os
+    kc = args.kubeconfig or _os.environ.get("KUBECONFIG")
+    if kc:
+        exists = _os.path.exists(kc)
+        check("KUBECONFIG", exists,
+              f"指向 {kc}" + ("" if exists else "（文件不存在）"),
+              "export KUBECONFIG=/path/to/kubeconfig")
+    else:
+        default_kc = _os.path.expanduser("~/.kube/config")
+        check("KUBECONFIG", _os.path.exists(default_kc),
+              "环境变量没设，回退到 ~/.kube/config"
+              + ("（存在）" if _os.path.exists(default_kc) else "（不存在）"),
+              "export KUBECONFIG=/path/to/kubeconfig")
+
+    # --- 3. 集群可达 -------------------------------------------------------
+    k8s = None
+    try:
+        k8s = K8sClient(kubeconfig=kc)
+        ok, info = k8s.ping()
+    except K8sUnavailable as exc:
+        ok, info = False, str(exc)
+    check("集群可达", ok, info,
+          "检查 kubeconfig 是否指对了集群；集群没起的话先起（沙箱见 scripts/setup-sandbox.sh）")
+
+    if not k8s or not ok:
+        _doctor_report(results)
+        return 1
+
+    # --- 4/5. RBAC：读得到吗、写得动吗 -------------------------------------
+    # 用 SelfSubjectAccessReview 直接问 API Server，比自己试着调一次干净：
+    # 没有副作用，而且 403 和 404 不会混。
+    ns_list = list(args.namespace or ["demo"])
+    write_ns = list(args.write_namespaces or ("demo", "staging"))
+    read_ok, read_detail = _can_i(k8s, "list", "", "pods", ns_list[0])
+    check("只读权限", read_ok,
+          f"namespace={ns_list[0]} 列 pods：{'允许' if read_ok else '被拒绝'}",
+          f"需要一个能 get/list/watch pods 的 Role（namespace {ns_list[0]}）")
+
+    for wns in write_ns:
+        w_ok, w_detail = _can_i(k8s, "patch", "apps", "deployments", wns)
+        check(f"写权限 · {wns}", w_ok,
+              f"patch deployments：{'允许' if w_ok else '被拒绝（审批通过后仍然执行不了）'}",
+              f"授予 namespace {wns} 内 deployments 的 patch/update 权限；"
+              f"只读部署可以忽略这一项，但要接受「改动执行不了」")
+
+    # --- 命名空间到底存不存在 ---------------------------------------------
+    #
+    # 上面两个检查用的是 SelfSubjectAccessReview，它只回答"你有没有权限"，
+    # **不回答"这东西存不存在"**——所以给一个拼错的命名空间，自检照样全绿。
+    # 这正是最典型的首次失败：装好了、跑起来了、页面打开一片空白，
+    # 而人完全不知道为什么。同类 CLI 工具挂上 kubeconfig 就能用，
+    # 恰恰是因为它们不需要你报一个命名空间。
+    try:
+        existing = set(k8s.namespaces())
+    except Exception as exc:  # noqa: BLE001
+        existing = set()
+        check("命名空间", False, f"列不出来：{exc}", "确认账号有 list namespaces 权限")
+    if existing:
+        hint = "、".join(sorted(existing)[:8]) + ("…" if len(existing) > 8 else "")
+        for check_ns in dict.fromkeys([*ns_list, *write_ns]):
+            if check_ns in existing:
+                continue
+            check(f"命名空间 · {check_ns}", False,
+                  "不存在——页面会是空的，而且不报错",
+                  f"换一个真实存在的：--namespace <名字>；当前集群里有 {hint}")
+        if "demo" not in existing and "demo" in write_ns:
+            # serve 的默认命名空间是 demo（沙箱约定）。真实集群里通常没有它，
+            # 不说清楚的话，人只会看到一个空控制台然后以为坏了。
+            check("默认命名空间", False,
+                  "集群里没有 demo（serve 的默认值）",
+                  "启动时显式指定：omagent serve --namespace <你的命名空间>")
+
+    # --- 6. metrics-server --------------------------------------------------
+    # 没有它，get_metrics 会返回空——而"内存够不够"恰恰是最常问的问题。
+    try:
+        metrics_ok = k8s.metrics_available()
+    except Exception:  # noqa: BLE001
+        metrics_ok = False
+    check("metrics-server", metrics_ok,
+          "metrics.k8s.io 可用" if metrics_ok else "没装，get_metrics 会返回空",
+          "kubectl apply -f sandbox/addons/metrics-server.yaml")
+
+    # --- 7. 模型 -----------------------------------------------------------
+    st = llm_status()
+    check("模型 API Key", bool(st["available"]),
+          f"{st['model']} @ {st['base_url']}（{'已配置' if st['available'] else '未配置'}）",
+          "在仓库根目录写 .env：DEEPSEEK_API_KEY=sk-...")
+
+    # --- 8. 用户库 ---------------------------------------------------------
+    users_path = args.users or (_ROOT / "var" / "users.json")
+    from pathlib import Path as _Path
+    has_users = _Path(users_path).exists()
+    check("用户库", True,
+          f"{users_path} " + ("已存在" if has_users else "不存在——首次启动会自动创建 admin 账号并打印随机密码"),
+          f"python -m omagent.cli useradd <用户名> --role operator")
+
+    return _doctor_report(results)
+
+
+def _can_i(k8s, verb: str, group: str, resource: str, namespace: str) -> tuple[bool, str]:
+    """用 SelfSubjectAccessReview 问一句"我能不能干这个"。"""
+    try:
+        from kubernetes import client as _c
+        review = _c.V1SelfSubjectAccessReview(
+            spec=_c.V1SelfSubjectAccessReviewSpec(
+                resource_attributes=_c.V1ResourceAttributes(
+                    verb=verb, group=group or None, resource=resource, namespace=namespace
+                )
             )
         )
-    if args.search:
-        hits = kb.similar(args.search, [], args.workload or "", limit=args.limit)
-        if not hits:
-            console.print("[dim]没有匹配的历史记录。[/dim]")
-            return 0
-        for score, e in hits:
-            console.print(f"[cyan]score={score:.3f}[/cyan]  {e.render()}")
+        resp = k8s.authz.create_self_subject_access_review(review)
+        return bool(resp.status.allowed), resp.status.reason or ""
+    except Exception as exc:  # noqa: BLE001
+        return False, f"检查失败：{exc}"
+
+
+def _doctor_report(results: list[tuple[str, bool, str, str]]) -> int:
+    failed = [r for r in results if not r[1]]
+    print("\n环境自检\n" + "─" * 66)
+    for name, ok, detail, _fix in results:
+        print(f"  {'✓' if ok else '✗'} {name:<18} {detail}")
+    if not failed:
+        print("─" * 66)
+        print("全部通过。启动：python -m omagent.cli serve\n")
         return 0
-    if not args.search and not args.stats:
-        entries = kb.all()[-args.limit :]
-        for e in entries:
-            console.print(e.render())
-    return 0
+    print("─" * 66)
+    print(f"{len(failed)} 项需要处理：\n")
+    for name, _ok, _detail, fix in failed:
+        if fix:
+            print(f"  {name}")
+            print(f"    → {fix}")
+    print()
+    return 1
 
 
-def cmd_eval(args) -> int:
-    from .evals import DEFAULT_CASES_DIR, load_cases, record_case, run_all
 
-    # --- 采集模式：把真实集群的当前状态固化成一条评测用例 ---
-    if args.record:
-        agent, _ = build_agent(args)
-        ns, name = args.record.split("/", 1) if "/" in args.record else ("demo", args.record)
-        out = record_case(
-            agent.k8s,
-            ns,
-            name,
-            args.kind,
-            args.id or f"recorded-{name}",
-            args.out or (ROOT / "evals" / "recorded" / f"{args.id or name}.yaml"),
-            expect_signature=args.expect_signature or "unknown",
-            acceptable_actions=(args.acceptable or "").split(",") if args.acceptable else [],
-            title=args.title or f"{args.kind}/{name} 现场采集",
-        )
-        console.print(f"✅ 已采集用例：{out}")
-        console.print("[dim]请人工核对并修正 expect.signature 后，再纳入评测集。[/dim]")
-        return 0
+def _build_providers(k8s, args):
+    """按命令行参数装配外部只读数据源。
 
-    # --- 回放模式 ---
-    cases = load_cases(args.cases or DEFAULT_CASES_DIR)
-    if not cases:
-        console.print("[red]未找到任何用例。[/red]")
-        return 2
+    默认去 ``monitoring`` 命名空间找 Prometheus / Loki，并且**经 API Server 的
+    service proxy** 访问——复用现有 kubeconfig，不需要 port-forward 或 ingress。
+    真实部署里想直连 Service DNS，用 --prometheus-url / --loki-url 覆盖。
 
-    # 规划器选择：规则引擎（默认，零成本）或 LLM（需 API Key）
-    planner_factory = None
-    if args.planner == "llm":
-        from .planner import LLMPlanner
+    连不上不算错误：注册表会跳过它，内置 K8s 工具照常工作。
+    外部依赖缺失应该是功能降级，不是启动失败。
+    """
+    from .observability import LokiProvider, PrometheusProvider
+    from .providers import ProviderRegistry
 
-        # 轻量可用性探测，避免 37 个用例逐个失败
-        import os as _os
+    if getattr(args, "no_observability", False):
+        return ProviderRegistry()
+    ns = getattr(args, "obs_namespace", "monitoring") or "monitoring"
+    return ProviderRegistry([
+        PrometheusProvider(k8s, namespace=ns,
+                           url=getattr(args, "prometheus_url", "") or ""),
+        LokiProvider(k8s, namespace=ns,
+                     url=getattr(args, "loki_url", "") or ""),
+    ])
 
-        if not (_os.environ.get("OMAGENT_LLM_API_KEY") or _os.environ.get("DEEPSEEK_API_KEY")):
-            console.print("[red]选择了 LLM 规划器但未配置 API Key。[/red]")
-            return 2
-        planner_factory = LLMPlanner
-        console.print("[cyan]使用 LLM 规划器（会产生 API 调用成本）[/cyan]")
 
-    def _progress(i: int, total: int, r) -> None:
-        mark = "[green]✓[/green]" if r.ok else (
-            "[yellow]缺口[/yellow]" if r.known_gap else "[red]✗[/red]"
-        )
-        console.print(f"  [{i:>2}/{total}] {mark} {r.case_id}", highlight=False)
+def _add_provider_args(parser) -> None:
+    parser.add_argument("--obs-namespace", default="monitoring",
+                        help="Prometheus / Loki 所在的命名空间（默认 monitoring）")
+    parser.add_argument("--prometheus-url", default="",
+                        help="直连 Prometheus 的地址；不填则经 API Server service proxy")
+    parser.add_argument("--loki-url", default="",
+                        help="直连 Loki 的地址；不填则经 API Server service proxy")
+    parser.add_argument("--no-observability", action="store_true",
+                        help="不装配 Prometheus / Loki，只用内置 K8s 工具")
 
-    if args.turns > 1:
-        console.print(
-            f"[cyan]启用多轮取证循环（最多 {args.turns} 轮）："
-            f"规划器可先要求查证据，Agent 真正执行后再下结论[/cyan]"
-        )
 
-    report = run_all(
-        cases,
-        planner_factory=planner_factory,
-        on_progress=_progress,
-        use_loop=args.turns > 1,
-        max_turns=args.turns,
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """以 MCP server 方式跑（stdio），把只读工具暴露给任意 MCP 客户端。
+
+    stdout 是协议通道，所以**任何提示都必须走 stderr**，否则会污染 JSON-RPC 流。
+    """
+    from .agent import WRITE_NAMESPACES, OpsAgent
+    from .audit import AuditLog
+    from .cases import CaseStore
+    from .k8s import K8sClient, K8sUnavailable
+    from .mcp import McpServer
+    from .tools import READONLY_TOOLS
+
+    load_env_file()
+    try:
+        k8s = K8sClient(kubeconfig=args.kubeconfig)
+    except K8sUnavailable as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    agent = OpsAgent(
+        k8s,
+        AuditLog(args.audit_path or (ROOT / "var" / "audit.jsonl")),
+        operator=f"mcp:{args.client or 'unknown'}",
+        write_namespaces=WRITE_NAMESPACES,
+        cases=CaseStore(ROOT / "var" / "cases.jsonl"),
     )
+    ok, detail = agent.cluster_status()
+    if not ok:
+        print(f"✗ 连不上集群：{detail}", file=sys.stderr)
+        return 1
 
-    t = Table(title="评测结果", show_header=True, header_style="bold")
-    t.add_column("用例", style="cyan", width=10)
-    t.add_column("难度", width=7)
-    t.add_column("标题")
-    t.add_column("判定", width=10)
-    for r in report.results:
-        if r.ok:
-            verdict = "[green]通过[/green]"
-        elif r.known_gap:
-            verdict = "[yellow]已知缺口[/yellow]"
-        else:
-            verdict = "[red]失败[/red]"
-        t.add_row(r.case_id, r.difficulty, r.title[:46], verdict)
-    console.print(t)
-
-    console.print()
-    console.print(f"用例总数            {report.total}")
-    console.print(f"严格通过            {report.passed}/{report.total}  ({report.pass_rate:.1%})")
-    console.print(
-        f"已知能力缺口        {report.known_gap_count} 条"
-        f"（预期失败 {report.known_gap_failures} 条，不计入能力达标率）"
-    )
-    console.print(f"[bold]能力达标率          {report.capability_pass_rate:.1%}[/bold]")
-    console.print(f"诊断特征准确率      {report.signature_accuracy:.1%}")
-    sc = report.strategy_counts
-    console.print(
-        f"策略分布            "
-        f"提出修复 [cyan]{sc.get('remediate', 0)}[/cyan] ／ "
-        f"要求取证 [cyan]{sc.get('investigate', 0)}[/cyan] ／ "
-        f"明确不介入 [cyan]{sc.get('abstain', 0)}[/cyan]"
-    )
-    if report.remediation_expected_cases:
-        console.print(
-            f"预期修复用例命中    {report.remediation_hit}/{report.remediation_expected_cases}"
-            f"（延后 {report.deferred_cases} 条——**不等于失败**，见立项材料 6.4）"
-        )
-    danger_style = "red" if report.dangerous_proposal_count else "green"
-    leak_style = "red" if report.gate_leak_count else "green"
-    console.print(
-        f"危险提议数          [{danger_style}]{report.dangerous_proposal_count}[/]"
-        f"  门禁泄漏数 [{leak_style}]{report.gate_leak_count}[/]"
-    )
-
-    failures = [r for r in report.results if not r.ok and not r.known_gap]
-    if failures:
-        console.print("\n[red]失败用例：[/red]")
-        for r in failures:
-            console.print(f"  [{r.case_id}] {r.title}")
-            for f in r.failures:
-                console.print(f"      ✗ {f}")
-
-    gaps = [r for r in report.results if r.known_gap and not r.ok]
-    if gaps:
-        console.print("\n[yellow]已知能力缺口（当前实现的盲区）：[/yellow]")
-        for r in gaps:
-            console.print(f"  [{r.case_id}] {r.title}")
-            console.print(f"      期望 {r.signature_expected} ／ 实际 {r.signature_actual}；"
-                          f"提议 {r.proposed_actions}")
-
-    if args.json:
-        import json
-
-        Path(args.json).write_text(
-            json.dumps(report.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        console.print(f"\n[dim]JSON 报告已写入 {args.json}[/dim]")
-
-    # 退出码：能力范围内的失败或任何安全问题都算失败
-    return 0 if (not failures and not report.dangerous_proposal_count and not report.gate_leak_count) else 1
+    print(f"omagent MCP server 就绪 ｜ 集群 {detail} ｜ 命名空间 {args.namespace} ｜ "
+          f"{len(READONLY_TOOLS)} 个只读工具（写操作不在此暴露）", file=sys.stderr)
+    return McpServer(agent, namespace=args.namespace).serve()
 
 
-def cmd_audit(args) -> int:
-    audit = AuditLog(args.audit)
-    if args.verify:
-        ok, msg = audit.verify()
-        console.print(f"{'✅' if ok else '❌'} 审计链校验：{msg}")
-        return 0 if ok else 1
-    recs = audit.records()
-    t = Table(title=f"审计日志（{len(recs)} 条）", show_header=True, header_style="bold")
-    t.add_column("seq", width=5)
-    t.add_column("时间", width=20)
-    t.add_column("事件", width=14)
-    t.add_column("摘要")
-    for r in recs[-args.limit :]:
-        p = r["payload"]
-        summary = p.get("conclusion") or p.get("output") or p.get("tool") or p.get("request") or ""
-        if r["event"] == "execution":
-            summary = f"{p.get('status')} {summary}"
-        t.add_row(str(r["seq"]), r["ts"][:19], r["event"], str(summary)[:90])
-    console.print(t)
-    return 0
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="omagent", description="O&M Agent —— 对话式 K8s 运维助手")
+    sub = p.add_subparsers(dest="command")
+
+    s = sub.add_parser("serve", help="启动监控台")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--operator", default="operator",
+                   help="仅在 --allow-anonymous 时用作操作员标识")
+    s.add_argument("--namespace", default="demo", help="默认命名空间")
+    s.add_argument("--kubeconfig", default=None)
+    s.add_argument("--model", default=None, help="覆盖模型名（默认读 OMAGENT_LLM_MODEL）")
+    s.add_argument("--demo", action="store_true", help="开放沙箱故障注入按钮")
+    s.add_argument("--write-namespaces", nargs="*", default=None,
+                   help="允许写操作的命名空间（默认 demo、staging）")
+    s.add_argument("--users", default=None, help=f"用户库路径（默认 {DEFAULT_USERS}）")
+    s.add_argument("--session-dir", default=None, help="对话持久化目录（默认 var/sessions）")
+    s.add_argument("--allow-anonymous", action="store_true",
+                   help="关闭鉴权（⚠️ 任何人都能批准写操作，只在本机一次性演示时用）")
+    s.add_argument("--no-bootstrap", action="store_true",
+                   help="用户库不存在时不自动建 admin 账号，直接报错退出")
+    _add_provider_args(s)
+    s.set_defaults(func=cmd_serve)
+
+    t = sub.add_parser("tools", help="打印工具清单与读写切分")
+    t.set_defaults(func=cmd_tools)
+
+    a = sub.add_parser("audit", help="校验审计链")
+    a.add_argument("--path", default=None)
+    a.set_defaults(func=cmd_audit)
+
+    st = sub.add_parser("status", help="打印模型配置状态")
+    st.set_defaults(func=cmd_status)
+
+    # --- 用户管理 ---
+    ua = sub.add_parser("useradd", help="新增用户")
+    ua.add_argument("name")
+    ua.add_argument("--role", choices=["operator", "viewer"], default="operator",
+                    help="operator 能批准变更；viewer 只能看和问（默认 operator）")
+    ua.add_argument("--password", default=None,
+                    help="直接给密码（不推荐：会留在 shell 历史里；不传则交互式输入）")
+    ua.add_argument("--users", default=None)
+    ua.add_argument("--force", action="store_true", help="同名用户已存在时覆盖")
+    ua.set_defaults(func=cmd_useradd)
+
+    pw = sub.add_parser("passwd", help="改密码")
+    pw.add_argument("name")
+    pw.add_argument("--password", default=None)
+    pw.add_argument("--users", default=None)
+    pw.set_defaults(func=cmd_passwd)
+
+    ud = sub.add_parser("userdel", help="删除用户")
+    ud.add_argument("name")
+    ud.add_argument("--users", default=None)
+    ud.set_defaults(func=cmd_userdel)
+
+    ev = sub.add_parser("eval", help="诊断质量评测（真模型真集群，会改集群状态）")
+    ev.add_argument("--only", default="", help="只跑这些剧本，逗号分隔，如 oom,probe")
+    ev.add_argument("--repeat", type=int, default=1, help="每个剧本跑几次（看稳定性）")
+    ev.add_argument("--settle", type=float, default=20.0, help="注入故障后等多少秒让它显现")
+    ev.add_argument("--model", default=None)
+    ev.add_argument("--kubeconfig", default=None)
+    ev.add_argument("--out", default=None, help="结果 JSON 写到哪")
+    ev.add_argument("--rescore", default=None,
+                    help="用当前预期重判一份已有报告（不重跑模型）")
+    ev.add_argument("--min-pass", type=float, default=None,
+                    help="通过率低于这个值就以非零码退出（给 CI 用）")
+    ev.set_defaults(func=cmd_eval)
+
+    ca = sub.add_parser("cases", help="查看案例库（语义记忆）")
+    ca.add_argument("--path", default=None)
+    ca.add_argument("--limit", type=int, default=20)
+    ca.set_defaults(func=cmd_cases)
+
+    us = sub.add_parser("users", help="列出用户")
+    us.add_argument("--users", default=None)
+    us.set_defaults(func=cmd_users)
+
+    d = sub.add_parser("doctor", help="上线前自检：集群连通性、RBAC、metrics-server、模型配置")
+    d.add_argument("--kubeconfig", default=None)
+    d.add_argument("--namespace", nargs="*", default=None, help="用于只读权限检查的命名空间")
+    d.add_argument("--write-namespaces", nargs="*", default=None,
+                   help="检查写权限的命名空间（默认 demo、staging）")
+    d.add_argument("--users", default=None)
+    d.set_defaults(func=cmd_doctor)
+
+    m = sub.add_parser("mcp", help="以 MCP server 运行（stdio，只读工具）")
+    m.add_argument("--namespace", default="demo", help="默认命名空间")
+    m.add_argument("--kubeconfig", default=None)
+    m.add_argument("--client", default="", help="客户端标识，写进审计的操作员字段")
+    m.add_argument("--audit-path", default=None)
+    _add_provider_args(m)
+    m.set_defaults(func=cmd_mcp)
+
+    return p
 
 
 def main(argv: list[str] | None = None) -> int:
-    # 自动装载工作区 .env（只装载 OMAGENT_/DEEPSEEK_/OPENAI_ 前缀，从不打印值）
-    from .config import ensure_local_bypass, load_env_file
-
-    load_env_file()
-    # 代理只用于外部 LLM API；本地/集群内地址必须绕过，
-    # 否则 kubernetes 客户端连 127.0.0.1:<port> 也会走代理而失败。
-    ensure_local_bypass()
-
-    p = argparse.ArgumentParser(prog="omagent", description="Kubernetes 运维 Agent（L1 档位）")
-    p.add_argument("--kubeconfig", default=None)
-    p.add_argument("--policy", default=None)
-    p.add_argument("--audit", default=str(ROOT / "var" / "audit.jsonl"))
-    p.add_argument("--knowledge", default=str(ROOT / "var" / "knowledge.jsonl"))
-    p.add_argument("--operator", default="sre@example.com")
-    p.add_argument("--read-only", action="store_true", help="只读模式，拒绝一切写操作")
-    sub = p.add_subparsers(dest="cmd", required=True)
-
-    s = sub.add_parser("status", help="显示集群连接与生效策略")
-    s.set_defaults(fn=cmd_status)
-
-    s = sub.add_parser("ask", help="自然语言入口：用一句话描述问题")
-    s.add_argument("text", help="例如：api-gateway 一直重启，帮我看看")
-    s.add_argument("--namespace", default=None, help="限定命名空间")
-    s.add_argument("--llm", action="store_true", help="用 LLM 规划器诊断")
-    s.set_defaults(fn=cmd_ask)
-
-    s = sub.add_parser("diagnose", help="诊断一个工作负载")
-    s.add_argument("target", help="<ns>/<workload> 或 <workload>")
-    s.add_argument("--kind", default="deployment")
-    s.add_argument("--execute", action="store_true", help="诊断后允许选择候选动作执行")
-    s.add_argument("--pick", type=int, default=None, help="直接选择候选编号，跳过交互")
-    s.add_argument("--llm", action="store_true", help="使用 LLM 规划器（需配置 API Key）")
-    s.set_defaults(fn=cmd_diagnose)
-
-    s = sub.add_parser("refuse", help="演示：请求一个越界动作，观察拒绝")
-    s.add_argument("request")
-    s.add_argument("--rule", default="delete_namespace")
-    s.set_defaults(fn=cmd_refuse)
-
-    s = sub.add_parser("audit", help="查看或校验审计日志")
-    s.add_argument("--verify", action="store_true")
-    s.add_argument("--limit", type=int, default=25)
-    s.set_defaults(fn=cmd_audit)
-
-    s = sub.add_parser("demo", help="运行三个演示剧本（PRD 第 9 节）")
-    s.add_argument("--auto", action="store_true", default=True, help="自动确认（演示用）")
-    s.set_defaults(fn=cmd_demo)
-
-    s = sub.add_parser("itbench", help="用 ITBench-Lite 真实事故数据评测（非自证）")
-    s.add_argument("--dir", default=str(ROOT / "var" / "itbench"), help="ITBench 数据目录")
-    s.add_argument("--scenarios", default=None, help="逗号分隔的场景名；默认全部")
-    s.set_defaults(fn=cmd_itbench)
-
-    s = sub.add_parser("fuzz", help="用大模型生成规则之外的场景，反测规则引擎")
-    s.add_argument("--n", type=int, default=6, help="生成多少个场景")
-    s.add_argument("--name", default="round1", help="输出文件名（evals/generated/<name>.yaml）")
-    s.add_argument("--analyze", default=None, help="只分析已有的生成文件，不再调用模型")
-    s.add_argument("--md", default=None, help="把盲区报告导出为 Markdown")
-    s.set_defaults(fn=cmd_fuzz)
-
-    s = sub.add_parser("web", help="启动 Web 审批界面（仅监听本机）")
-    s.add_argument("--host", default="127.0.0.1", help="监听地址，默认仅本机")
-    s.add_argument("--port", type=int, default=8765)
-    s.add_argument(
-        "--planner", choices=["rule", "llm"], default="rule",
-        help="默认规划器（界面上可切换）",
-    )
-    s.add_argument("--demo", action="store_true",
-                   help="开启演示模式：界面上可直接注入沙箱故障，并缩短变更冷却期")
-    s.add_argument("--cooldown", type=int, default=None,
-                   help="同一工作负载的变更冷却秒数（默认 300；演示模式自动降到 20）")
-    s.set_defaults(fn=cmd_web)
-
-    s = sub.add_parser("knowledge", help="查看/检索沉淀的故障处置知识")
-    s.add_argument("--search", default=None, help="按故障特征签名检索，如 oom_killed")
-    s.add_argument("--hint", default=None, help="按签名生成一句历史提示")
-    s.add_argument("--workload", default=None)
-    s.add_argument("--stats", action="store_true", help="只看统计")
-    s.add_argument("--limit", type=int, default=10)
-    s.set_defaults(fn=cmd_knowledge)
-
-    s = sub.add_parser("eval", help="运行评测集回放（PRD 13.2）")
-    s.add_argument("--cases", default=None, help="用例目录，默认 evals/cases")
-    s.add_argument(
-        "--planner", choices=["rule", "llm"], default="rule",
-        help="规划器：rule=确定性规则引擎（默认，零成本）；llm=大模型",
-    )
-    s.add_argument(
-        "--turns", type=int, default=1,
-        help="多轮取证轮次：1=单轮（默认）；>1 启用 AgentLoop，规划器先取证再下结论",
-    )
-    s.add_argument("--json", default=None, help="把 JSON 报告写入指定路径")
-    s.add_argument("--record", default=None, help="采集模式：<ns>/<workload>，把现场状态固化成用例")
-    s.add_argument("--record-kind", dest="kind", default="deployment")
-    s.add_argument("--id", default=None, help="采集用例的 id")
-    s.add_argument("--out", default=None, help="采集用例的输出路径")
-    s.add_argument("--title", default=None)
-    s.add_argument("--expect-signature", dest="expect_signature", default=None)
-    s.add_argument("--acceptable", default=None, help="可接受动作，逗号分隔")
-    s.set_defaults(fn=cmd_eval)
-
-    args = p.parse_args(argv)
-    return args.fn(args)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    parser = build_parser()
+    # 不带子命令时默认 serve
+    if not argv or argv[0].startswith("-"):
+        argv = ["serve", *argv]
+    args = parser.parse_args(argv)
+    return args.func(args)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

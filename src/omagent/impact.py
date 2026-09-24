@@ -49,8 +49,14 @@ def analyse_workload_impact(
     namespace: str,
     kind: str,
     name: str,
+    target_replicas: int | None = None,
 ) -> Impact:
-    """分析对某个工作负载执行变更的影响面。"""
+    """分析对某个工作负载执行变更的影响面。
+
+    ``target_replicas`` 用于 scale 类操作：影响面必须按**改完之后**的状态算，
+    而不是当前状态。否则"把 3 缩到 1"和"把 3 扩到 10"会给出同一张卡片，
+    而前者会把一个有冗余的服务变成单点——这恰恰是操作员最需要看到的信息。
+    """
     impact = Impact()
     try:
         wl = k8s.read_workload(namespace, kind, name)
@@ -58,10 +64,33 @@ def analyse_workload_impact(
         impact.notes.append(f"无法读取工作负载，影响面未知: {exc}")
         return impact
 
-    impact.replicas = int(wl.spec.replicas or 0)
+    current = int(wl.spec.replicas or 0)
+    impact.replicas = current
     impact.stateful = kind.lower() == "statefulset"
-    impact.single_point = impact.replicas <= 1
     impact.has_pvc = _detect_pvc(wl, kind)
+
+    if target_replicas is None:
+        impact.single_point = current <= 1
+    else:
+        target_replicas = int(target_replicas)
+        impact.target_replicas = target_replicas
+        # 单点判断看**改完之后**
+        impact.single_point = target_replicas <= 1
+        if target_replicas < current:
+            impact.pods_removed = current - target_replicas
+            impact.notes.append(
+                f"副本数将从 {current} 缩减到 {target_replicas}，"
+                f"会终止 {impact.pods_removed} 个实例"
+            )
+            if target_replicas == 0:
+                impact.notes.append("⚠️ 目标副本数为 0：这个服务将完全没有实例在跑")
+            elif target_replicas == 1 and current > 1:
+                impact.notes.append("⚠️ 缩到 1 个副本后就没有冗余了，该实例故障即服务中断")
+        elif target_replicas > current:
+            impact.pods_added = target_replicas - current
+            impact.notes.append(
+                f"副本数将从 {current} 增加到 {target_replicas}，会新建 {impact.pods_added} 个实例"
+            )
 
     labels = _workload_labels(wl)
 
@@ -136,22 +165,3 @@ def analyse_node_impact(k8s: K8sClient, node: str) -> Impact:
     if len(pods) > 10:
         impact.notes.append(f"节点上承载 {len(pods)} 个 Pod，drain 影响面较大")
     return impact
-
-
-def summarise(impact: Impact) -> list[tuple[str, str]]:
-    """把影响面转成确认卡片用的 (标签, 值) 列表。缺失值显式标注。"""
-    def val(v: Any, unknown: str = "未知") -> str:
-        if v is None or v == "":
-            return unknown
-        return str(v)
-
-    return [
-        ("影响副本", f"{impact.replicas} 个" if impact.replicas else "未知"),
-        ("影响 Pod 数", f"{impact.pods_restarted} 个"),
-        ("是否有状态", "是（StatefulSet）" if impact.stateful else "否（无状态）"),
-        ("是否单点", "⚠️ 是（单副本）" if impact.single_point else "否"),
-        ("持久卷挂载", "⚠️ 是" if impact.has_pvc else "否"),
-        ("PDB 约束", val(impact.pdb, "未知")),
-        ("上游 Service", "、".join(impact.upstream_deps) if impact.upstream_deps else "无"),
-        ("影响节点数", str(impact.nodes_affected)),
-    ]

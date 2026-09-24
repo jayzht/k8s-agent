@@ -1,0 +1,50 @@
+# kind 集群配置：1 控制面 + 4 worker。
+#
+# 为什么要多节点：
+#   单节点集群下，节点级动作（cordon / drain / 调度不上去 / Pod 分布）
+#   全都退化成"没意义"——drain 一个只有自己的节点，驱逐完 Pod 还是回到原处。
+#   4 个 worker 之后，"把 Pod 从 A 挪到 B"这件事才真的成立，PDB 也才有约束力。
+#
+# ⚠️ 前提：宿主机的 fs.inotify.max_user_instances 必须够大。
+#   每个 kind 节点都要跑 containerd + kubelet + kube-proxy + CNI，各自消耗
+#   inotify 实例。默认的 128 在跑着若干容器的机器上不够用，症状有两种：
+#     · 加第 4 个 worker 时 kubelet 起不来（kind 会把整个集群回滚删掉）
+#     · 集群建起来了，但 **kube-proxy 在部分节点 CrashLoopBackOff**，
+#       报 `fsnotify watcher init: too many open files`
+#   第二种特别隐蔽：节点都是 Ready，演示应用也照跑（它不访问别的服务），
+#   但 Service 的 ClusterIP 路由是坏的——pod 连不上 apiserver，
+#   metrics-server 这类需要访问 API 的组件全废。
+#
+#   先确认：
+#       sysctl -w fs.inotify.max_user_instances=2048
+#       sysctl -w fs.inotify.max_user_watches=524288
+#   建完集群后一定要检查 kube-proxy 是不是 4/4 Running（setup-sandbox.sh 会查）。
+#
+# node-pool 标签用于演示「负载被钉在某类节点上，而那个节点被 cordon 了」。
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: om-sandbox
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "topology.kubernetes.io/zone=zone-a,node-pool=system"
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-a
+      node-pool: general
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-b
+      node-pool: general
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-c
+      node-pool: general
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-d
+      node-pool: batch

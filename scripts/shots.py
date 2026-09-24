@@ -1,99 +1,135 @@
-"""用 Playwright 驱动 Web 审批界面并截图，用于验证真实渲染效果。"""
-import os, sys, time
+#!/usr/bin/env python
+"""给监控台界面截图，用于文档和渲染回归。
+
+用法：
+    python scripts/shots.py                      # 只截监控台（左栏 + 空对话）
+    python scripts/shots.py <session_id>         # 额外截该会话的确认卡片与执行结果
+    python scripts/shots.py <sid> <inject_sid>   # 再截一张提示注入告警
+    OM_WEB=http://127.0.0.1:9000 python scripts/shots.py
+
+前置：
+    bash scripts/setup-shots.sh        # 装 playwright 与浏览器
+    python -m omagent.cli serve --demo # 另开一个终端把服务跑起来
+
+要截"确认卡片"那张，需要先有一个停在待批状态的会话。可以用
+`var/reach_approval.py` 之类的脚本驱动一次，或者手工在页面上问到出卡片为止。
+"""
+
+from __future__ import annotations
+
+import os
+import sys
 from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
-ROOT = Path("/home/ubuntu/O&M-agent")
-SHOTS = ROOT / "var" / "shots"
-SHOTS.mkdir(parents=True, exist_ok=True)
+ROOT = Path(__file__).resolve().parents[1]
+OUT = ROOT / "docs" / "screenshots"
 URL = os.environ.get("OM_WEB", "http://127.0.0.1:8765")
+USER = os.environ.get("OM_USER", "zhang.wei")
+PASS = os.environ.get("OM_PASS", "ops-pass-2026")
 
 
-def shot(page, name):
-    page.screenshot(path=str(SHOTS / name), full_page=False)
-    print(f"  ✓ {name}")
+def _sign_in(page) -> None:
+    """控制台有登录门，不登录就永远等不到 .wl。
+
+    这段以前是缺的——加上鉴权之后 shots.py 直接超时，说明它没跟上。
+    """
+    try:
+        page.wait_for_selector("#login-mask:not([hidden])", timeout=8000)
+    except Exception:
+        return  # 已经是登录态（比如复用了 storage_state）
+    page.fill("#login-user", USER)
+    page.fill("#login-pass", PASS)
+    page.click("#login-btn")
 
 
-with sync_playwright() as pw:
-    browser = pw.chromium.launch()
-    page = browser.new_page(viewport={"width": 1720, "height": 1060}, device_scale_factor=1)
-    console_errors = []
-    page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)
-    page.on("pageerror", lambda e: console_errors.append(str(e)))
-
-    print("加载页面…")
+def _open(browser, width: int, height: int, sid: str = ""):
+    ctx = browser.new_context(viewport={"width": width, "height": height},
+                              device_scale_factor=2)
+    page = ctx.new_page()
+    if sid:
+        page.add_init_script(
+            f"sessionStorage.setItem('om_sid', {sid!r});"
+            f"localStorage.setItem('om_ns', 'demo');"
+        )
     page.goto(URL, wait_until="networkidle")
-    page.wait_for_timeout(1500)
-    shot(page, "01-idle.png")
+    _sign_in(page)
+    page.wait_for_selector(".wl", timeout=30000)
+    return page
 
-    # 自然语言入口：先展示能解析的情况
-    print("演示自然语言入口…")
-    try:
-        page.fill("#ask-text", "api-gateway 一直重启，帮我看看")
-        page.click("button:has-text('理解并诊断')")
-        page.wait_for_selector(".cand", timeout=180000)
-        page.wait_for_timeout(1200)
-        shot(page, "07-ask-resolved.png")
-    except Exception as e:
-        print("  !! 自然语言诊断失败：", e)
 
-    # 再展示"解析不出目标时如实拒绝"
-    print("演示意图拒识…")
-    try:
-        page.fill("#ask-text", "订单服务 5xx 飙升了")
-        page.click("button:has-text('理解并诊断')")
-        page.wait_for_selector(".confirm.blocked", timeout=120000)
-        page.wait_for_timeout(900)
-        shot(page, "08-ask-refused.png")
-    except Exception as e:
-        print("  !! 拒识演示失败：", e)
+def main() -> int:
+    session_id = sys.argv[1] if len(sys.argv) > 1 else ""
+    injection_id = sys.argv[2] if len(sys.argv) > 2 else ""
+    OUT.mkdir(parents=True, exist_ok=True)
+    # 浏览器若装在仓库内（沙箱下 $HOME 只读时的做法），显式指一下
+    bundled = ROOT / "var" / "ms-playwright"
+    if bundled.is_dir() and not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled)
 
-    # 切到策略页
-    page.click('button.tab[data-tab="policy"]')
-    page.wait_for_timeout(700)
-    shot(page, "02-policy.png")
-    page.click('button.tab[data-tab="audit"]')
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
 
-    # 选一个工作负载做诊断
-    print("触发诊断…")
-    page.click('#wl-list li:has-text("api-gateway")')
-    try:
-        page.wait_for_selector(".cand", timeout=180000)
-    except Exception as e:
-        print("  !! 未出现候选动作：", e)
-        shot(page, "03-diagnosis-timeout.png")
-    page.wait_for_timeout(1200)
-    shot(page, "03-diagnosis.png")
+        # 1) 全新会话：左栏监控台 + 空对话
+        page = _open(browser, 1680, 1000)
+        page.wait_for_timeout(1500)
+        page.screenshot(path=str(OUT / "01-console.png"))
+        print(f"✓ {OUT / '01-console.png'}")
 
-    # 生成确认卡片（产品主角）
-    print("生成确认卡片…")
-    btns = page.query_selector_all(".cand .btn")
-    if btns:
-        btns[0].click()
+        if not session_id:
+            _shot_injection(browser, injection_id)
+            browser.close()
+            return 0
+
+        # 2) 已有会话：完整对话 + 待确认卡片
+        page2 = _open(browser, 1680, 1100, sid=session_id)
         try:
-            page.wait_for_selector(".confirm", timeout=120000)
-        except Exception as e:
-            print("  !! 确认卡片未出现：", e)
-        page.wait_for_timeout(1200)
-        shot(page, "04-confirm-card.png")
+            page2.wait_for_selector(".approval", timeout=30000)
+        except Exception:
+            print("✗ 这个会话当前没有待确认的卡片，跳过审批截图")
+            _shot_injection(browser, injection_id)
+            browser.close()
+            return 1
 
-    # 越界请求演示
-    print("演示越界请求…")
-    page.click('button:has-text("删除 production 命名空间")')
-    page.wait_for_timeout(1500)
-    shot(page, "05-refusal.png")
+        page2.screenshot(path=str(OUT / "02-approval.png"))
+        print(f"✓ {OUT / '02-approval.png'}")
 
-    # 知识沉淀
-    page.click('button.tab[data-tab="knowledge"]')
-    page.wait_for_timeout(900)
-    shot(page, "06-knowledge.png")
+        # 3) 点批准，截执行结果
+        page2.click(".approval .btn-approve")
+        page2.wait_for_selector(".exec", timeout=180000)
+        page2.wait_for_timeout(2500)
+        page2.eval_on_selector(".exec", "el => el.scrollIntoView({block:'center'})")
+        page2.wait_for_timeout(600)
+        page2.screenshot(path=str(OUT / "03-executed.png"))
+        print(f"✓ {OUT / '03-executed.png'}")
 
-    if console_errors:
-        print("浏览器控制台错误：")
-        for e in console_errors[:10]:
-            print("   !", e[:200])
-    else:
-        print("浏览器控制台无错误 ✅")
+        # 4) 提示注入告警
+        _shot_injection(browser, injection_id)
 
-    browser.close()
-print("DONE")
+        browser.close()
+    return 0
+
+
+def _shot_injection(browser, injection_id: str) -> None:
+    """截"日志里有人塞了指令"这张告警卡。
+
+    这是安全事件的可视化证据：注入文本来自集群数据，模型没有执行它，
+    但**人必须看得见**——所以这张图本身就值得进文档。
+    """
+    if not injection_id:
+        return
+    page = _open(browser, 1680, 1100, sid=injection_id)
+    try:
+        page.wait_for_selector(".injection", timeout=30000)
+    except Exception:
+        print("✗ 这个会话里没有注入告警，跳过")
+        return
+    page.eval_on_selector(".injection", "el => el.scrollIntoView({block:'center'})")
+    page.wait_for_timeout(800)
+    page.screenshot(path=str(OUT / "10-injection.png"))
+    print(f"✓ {OUT / '10-injection.png'}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

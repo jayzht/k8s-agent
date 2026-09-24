@@ -1,0 +1,13 @@
+# monitoring 命名空间 —— 本项目**自己部署**的可观测组件都放这里。
+#
+# 为什么要单独开一个命名空间，而不是塞进 observability：
+#   observability 里已经有一套**仿真**的 prometheus / grafana / log-collector
+#   （镜像 om-demo-app:1，是演示拓扑的一部分，故意做成"看起来像但不可用"）。
+#   把真的 Prometheus/Loki 混进去，会出现两个 Service 抢同一个名字、
+#   排障时根本分不清抓到的是真数据还是仿真数据。所以真组件一律放 monitoring。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: om-monitoring

@@ -11,8 +11,20 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+# 数据根目录：会话、审计、用户库、案例库都落在它下面。
+#
+# 默认取"源码仓库根"，也就是 <repo>/var/。但这个默认假设了**你是在源码 checkout
+# 里跑**——`pip install omagent` 之后 __file__ 在 site-packages 里，
+# parents[2] 会变成 lib/python3.x，于是 var/ 被写到一个莫名其妙的地方。
+# 容器里更明显：非 root 用户根本写不进 site-packages。
+#
+# 所以给一个显式出口：OMAGENT_HOME 优先。
+_env_home = os.environ.get("OMAGENT_HOME")
+ROOT = Path(_env_home).resolve() if _env_home else Path(__file__).resolve().parents[2]
 DEFAULT_ENV_FILE = ROOT / ".env"
+
+DEFAULT_LLM_BASE_URL = "https://api.deepseek.com/v1"
+DEFAULT_LLM_MODEL = "deepseek-chat"
 
 # 只装载这些前缀的变量，避免把无关的环境变量误带进进程
 ALLOWED_PREFIXES = ("OMAGENT_", "DEEPSEEK_", "OPENAI_")
@@ -58,10 +70,10 @@ def llm_credentials() -> tuple[str, str, str]:
     base_url = (
         os.environ.get("OMAGENT_LLM_BASE_URL")
         or os.environ.get("DEEPSEEK_BASE_URL")
-        or "https://api.deepseek.com/v1"
+        or DEFAULT_LLM_BASE_URL
     )
     api_key = os.environ.get("OMAGENT_LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
-    model = os.environ.get("OMAGENT_LLM_MODEL") or "deepseek-flash"
+    model = os.environ.get("OMAGENT_LLM_MODEL") or DEFAULT_LLM_MODEL
     return base_url, api_key, model
 
 

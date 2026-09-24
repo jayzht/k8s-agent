@@ -1,0 +1,248 @@
+# Loki —— 真的能查的日志库（单进程 `-target=all` + filesystem 存储）。
+#
+# 为什么需要它：
+#   observability/log-collector 是**仿真**的 DaemonSet（om-demo-app:1），
+#   它只是"看起来在收日志"，没有任何后端，也没有查询 API。
+#   这个 Loki 是真的：promtail 推给它，它落在本地文件系统上，
+#   /loki/api/v1/query_range、/loki/api/v1/labels 都能返回真数据。
+#
+# 模式：单副本 Deployment + `-target=all`（all-in-one 单进程），
+#       distributor/ingester/querier/compactor 全在一个进程里，
+#       ring 用 inmemory、索引和块都落 filesystem —— 沙箱够用且不需要额外依赖。
+#
+# 镜像：本环境访问不了 Docker Hub，由 install-monitoring.sh 经华为云镜像站
+#       拉取后 kind load 进节点。
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: om-monitoring
+data:
+  loki-config.yaml: |
+    # 沙箱单租户，不需要 X-Scope-OrgID
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9096
+      log_level: info
+
+    # 单进程 all-in-one 的公共配置：ring 走内存，数据全落 /loki
+    common:
+      instance_addr: 127.0.0.1
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+
+    # schema v13 + tsdb 是 Loki 3.x 的默认索引方案
+    schema_config:
+      configs:
+        - from: 2024-04-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    storage_config:
+      tsdb_shipper:
+        active_index_directory: /loki/tsdb-index
+        cache_location: /loki/tsdb-cache
+      filesystem:
+        directory: /loki/chunks
+
+    limits_config:
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+      allow_structured_metadata: true
+      retention_period: 24h
+
+    # ⚠️ 关键的一段，默认值(3h)在本沙箱会让历史日志"查不到"。
+    # promtail 第一次跑时 positions 是空的，会把 /var/log/pods 下**已有的**
+    # 日志从文件头读一遍——演示 Pod 已经跑了十几个小时，于是它一口气回灌了
+    # 十几个小时前的日志。这些数据的 chunk 还留在 ingester 内存里没刷盘，
+    # 而 querier 默认只对最近 3h 的数据去问 ingester，更早的只查长期存储，
+    # 结果就是：索引里有 series（/loki/api/v1/labels 能看到 demo），
+    # 但 query_range 一行都返回不了（index_total_chunks=0）。
+    # 把窗口放到 >= 保留期，ingester 里还没刷盘的旧数据也能被查到。
+    # 生产环境按需调小（正常情况 chunk 2h 内就刷盘了，默认 3h 够用）。
+    #
+    # 注意层级：query_ingesters_within 属于 querier，**不是** limits_config。
+    # 写进 limits_config 会映射到 validation.plain 并直接启动失败：
+    #   field query_ingesters_within not found in type validation.plain
+    querier:
+      query_ingesters_within: 24h
+
+    # 保留 24h：emptyDir 本来就活不过 Pod，顺手让 compactor 真的跑起来。
+    compactor:
+      working_directory: /loki/compactor
+      retention_enabled: true
+      delete_request_store: filesystem
+      retention_delete_delay: 2h
+
+    ruler:
+      storage:
+        type: local
+        local:
+          directory: /loki/rules
+      rule_path: /loki/rules-temp
+      ring:
+        kvstore:
+          store: inmemory
+      enable_api: true
+
+    # 环境没有外网，关掉匿名用量上报，免得日志里全是连接失败
+    analytics:
+      reporting_enabled: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: om-monitoring
+spec:
+  selector:
+    app.kubernetes.io/name: loki
+  ports:
+  - name: http
+    port: 3100
+    targetPort: http
+    protocol: TCP
+  - name: grpc
+    port: 9096
+    targetPort: grpc
+    protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: om-monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loki
+        app.kubernetes.io/part-of: om-monitoring
+    spec:
+      securityContext:
+        # grafana/loki 镜像默认就是 10001，这里显式写死避免不同版本漂移
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: loki
+        image: grafana/loki:3.2.1
+        imagePullPolicy: IfNotPresent
+        args:
+        - -config.file=/etc/loki/loki-config.yaml
+        - -target=all
+        ports:
+        - name: http
+          containerPort: 3100
+          protocol: TCP
+        - name: grpc
+          containerPort: 9096
+          protocol: TCP
+        # Loki 的 /ready 在单进程(-target=all)模式下要等 ring 里各模块 ACTIVE
+        # 才返回 200：ingester 会先 "auto-joining cluster after timeout"，
+        # 再 "sleeping for initial delay before starting periodic flushing"，
+        # 实测启动到 ready 要 40~60s，WAL 回放时更久。
+        # 所以用 startupProbe 给足启动时间（3 分钟），readiness/liveness 再接手。
+        # 注意：这里坚持用 /ready 而不是 tcpSocket —— tcpSocket 在 ingester
+        # 还没进 ring 时也会"就绪"，那样 Service 会把流量打给一个查不出数据的实例。
+        startupProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 36
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          periodSeconds: 10
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          periodSeconds: 15
+          failureThreshold: 6
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - name: config
+          mountPath: /etc/loki
+          readOnly: true
+        - name: data
+          mountPath: /loki
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: config
+        configMap:
+          name: loki-config
+      # ⚠️ 这里**必须**用 PVC，不能像 Prometheus 那样用 emptyDir。
+      #   区别在于数据能不能自己长回来：
+      #     Prometheus 丢盘后几十秒内就把所有 target 重新抓一遍，指标自动补齐；
+      #     日志不行 —— promtail 的 positions 记着"我读到哪了"，Loki 一重启，
+      #     那些日志既不在 Loki 里、promtail 也不会再发一遍，中间就是**永久空洞**。
+      #   用 standard(local-path) 这个默认 StorageClass；配合上面的
+      #   strategy: Recreate（RWO 卷不能被两个 Pod 同时挂）。
+      - name: data
+        persistentVolumeClaim:
+          claimName: loki-data
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loki-data
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: om-monitoring
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 2Gi

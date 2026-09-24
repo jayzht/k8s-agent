@@ -1,0 +1,46 @@
+# 本机沙箱（kind）专用。**Linux 上用这个。**
+#
+#   export DEEPSEEK_API_KEY=sk-...
+#   docker compose -f docker-compose.sandbox.yml up
+#
+# 从零到能打开页面（含建集群）用一条命令：
+#   bash scripts/quickstart.sh
+#
+# ## 为什么必须是 host 网络
+#
+# 沙箱集群是 kind 起的，它生成的 kubeconfig 里写的是
+# `server: https://127.0.0.1:<随机端口>`——**这个端口只绑在宿主机的回环上**。
+# 实测（bridge 网络下三种走法全不通）：
+#
+#   10.0.4.5:6443（kind 节点 IP）  → timeout，kind 网络和 compose 网络不互通
+#   172.17.0.1:38587（docker0 网关）→ timeout，API server 没监听在这个地址上
+#   host.docker.internal            → 名字都解析不了
+#
+# 所以只能让容器直接用宿主机的网络命名空间。这样 127.0.0.1 就是宿主机，
+# 连接通、而且 **TLS 证书也对得上**（kind 的证书 SAN 里有 127.0.0.1）。
+#
+# 换个做法（把 kubeconfig 里的 127.0.0.1 改写成 host.docker.internal）也能连上，
+# 但 kind 的自签证书不含那个名字，就得关掉证书校验——为了跑个 demo 把 TLS
+# 校验关掉，不划算，也不该成为默认姿势。
+#
+# ⚠️ host 网络在 Linux 上有效，Docker Desktop（Mac/Windows）不支持。
+#    那些平台请直接用 `omagent serve`（见 README 路径 A/B）。
+services:
+  omagent:
+    image: ${OMAGENT_IMAGE:-omagent:1.0.0}
+    build: .
+    # 用宿主机网络：ports 映射会被忽略，服务直接监听在宿主机上
+    network_mode: host
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?需要设置 DEEPSEEK_API_KEY}
+      OMAGENT_LLM_MODEL: ${OMAGENT_LLM_MODEL:-deepseek-chat}
+      KUBECONFIG: /kubeconfig/config
+    volumes:
+      - ${KUBECONFIG_PATH:-./var/kubeconfig}:/kubeconfig/config:ro
+      - omagent-data:/data
+    restart: unless-stopped
+    # 只监听回环：这个容器手里握着"批准集群变更"的能力，别顺手开给整个网段
+    command: ["serve", "--host", "127.0.0.1", "--port", "8765", "--demo"]
+
+volumes:
+  omagent-data:

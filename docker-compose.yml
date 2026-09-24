@@ -1,0 +1,42 @@
+# O&M Agent —— 指向**你自己的** Kubernetes 集群。
+#
+#   export KUBECONFIG_PATH=~/.kube/config
+#   export DEEPSEEK_API_KEY=sk-...
+#   docker compose up
+#
+# 起来之后看日志拿首次登录的 admin 密码：
+#   docker compose logs omagent | grep -A5 首次启动
+#
+# 本机 kind 沙箱请改用 docker-compose.sandbox.yml（host 网络），原因见那个文件的注释。
+#
+# **只想跑、不想 clone 仓库**：
+#   OMAGENT_IMAGE=ghcr.io/<你的用户名>/omagent:1.0.0 \
+#   KUBECONFIG_PATH=~/.kube/config DEEPSEEK_API_KEY=sk-... docker compose up -d
+#   （把本文件里的 build: . 注释掉，compose 就会直接拉镜像）
+services:
+  omagent:
+    # 有源码就本地构建；**只想跑、没有源码**的话把 build 注释掉，
+    # 改成从镜像仓库拉（镜像由 .github/workflows/docker-publish.yml 发布）：
+    #
+    #   OMAGENT_IMAGE=ghcr.io/<你的用户名>/omagent:1.0.0 docker compose up -d
+    #
+    # 那种情况下一条命令就能用，不需要 clone 仓库、也不需要装 Python。
+    image: ${OMAGENT_IMAGE:-omagent:1.0.0}
+    build: .
+    ports:
+      - "127.0.0.1:8765:8765"     # 只绑本机。要给别人访问自己改成 0.0.0.0，但先想清楚鉴权
+    environment:
+      # 模型：任何 OpenAI 兼容接口都行。注意这里是从宿主机环境传进来的，
+      # 不要把 key 写进本文件——它会被提交。
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?需要设置 DEEPSEEK_API_KEY}
+      OMAGENT_LLM_MODEL: ${OMAGENT_LLM_MODEL:-deepseek-chat}
+      KUBECONFIG: /kubeconfig/config
+    volumes:
+      # 挂只读：容器没有任何理由改你的 kubeconfig
+      - ${KUBECONFIG_PATH:-~/.kube/config}:/kubeconfig/config:ro
+      # 会话 / 审计链 / 用户库 / 案例库 —— 必须持久化，否则重启即失忆
+      - omagent-data:/data
+    restart: unless-stopped
+
+volumes:
+  omagent-data:

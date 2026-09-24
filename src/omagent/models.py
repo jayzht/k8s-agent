@@ -1,11 +1,13 @@
-"""O&M Agent 核心数据契约。
+"""核心数据契约。
 
-设计要点（PRD 5.2）：
-本系统最核心的安全属性是——一个工具**要么**永远自动放行，**要么**永远需要人工
-批准。这个切分是**工具定义本身的属性**，在注册时就固定下来。规划器（或 LLM）
-产出的任何内容都无法改变它。
+设计要点（只有一条，但它是整个产品的地基）：
 
-这意味着安全性由 schema 强制，而不是靠模型"今天心情好"的自我判断。
+    一个工具**要么**永远自动执行，**要么**永远需要人工批准。
+    这个切分是**工具定义本身的属性**（见 ``tools.py``），在注册时就固定下来。
+    模型产出的任何内容都无法改变它。
+
+没有分级、没有熔断、没有配置化的风险矩阵。只有"读"和"写"两档，
+因为运维的人话就是这么分的：**看东西不用问，动东西要问。**
 """
 
 from __future__ import annotations
@@ -13,41 +15,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from enum import Enum
 from typing import Any
-
-
-class Tier(Enum):
-    """动作危险等级。数值语义见 config/policy.yaml。"""
-
-    T0 = "T0"  # 只读，自动执行
-    T1 = "T1"  # 低危写，一键确认
-    T2 = "T2"  # 中危写，强确认
-    T3 = "T3"  # 禁止，直接拒绝
-
-    @property
-    def rank(self) -> int:
-        return {"T0": 0, "T1": 1, "T2": 2, "T3": 3}[self.value]
-
-    @property
-    def requires_approval(self) -> bool:
-        return self is not Tier.T0
-
-    @property
-    def forbidden(self) -> bool:
-        return self is Tier.T3
-
-    @property
-    def confirm_strength(self) -> str:
-        return {"T0": "auto", "T1": "one-click", "T2": "strong", "T3": "refused"}[self.value]
-
-    @property
-    def label(self) -> str:
-        return {"T0": "只读", "T1": "低危", "T2": "中危", "T3": "禁止"}[self.value]
-
-    @classmethod
-    def max_of(cls, *tiers: "Tier") -> "Tier":
-        return max(tiers, key=lambda t: t.rank)
 
 
 def now_iso() -> str:
@@ -60,7 +28,11 @@ def new_id(prefix: str = "") -> str:
 
 @dataclass(frozen=True)
 class Target:
-    """动作的作用对象。冻结以保证审批卡片展示的内容与执行内容一致。"""
+    """动作的作用对象。
+
+    冻结（frozen）是刻意的：审批卡片上展示的目标与真正执行的目标必须是同一个值，
+    否则会出现"批准 A、执行 B"。冻结让这种篡改在类型层面就写不出来。
+    """
 
     kind: str
     namespace: str
@@ -74,28 +46,26 @@ class Target:
     def to_dict(self) -> dict[str, str]:
         return {"kind": self.kind, "namespace": self.namespace, "name": self.name}
 
-
-@dataclass
-class Evidence:
-    """一条诊断证据。每个结论都必须挂载原始证据（PRD 4.1-B），禁止无证据结论。"""
-
-    kind: str  # event | log | metric | state | config | probe
-    ref: str
-    detail: str
-    source: str = ""
-
-    def render(self) -> str:
-        return f"[{self.kind}] {self.ref} — {self.detail}"
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Target":
+        return cls(kind=d.get("kind", ""), namespace=d.get("namespace", ""),
+                   name=d.get("name", ""))
 
 
 @dataclass
 class Impact:
-    """影响面分析结果（PRD 5.4）。这是让用户"敢点确认"的核心信息。"""
+    """影响面分析结果：让操作员"敢点确认"的关键信息。
+
+    ``replicas`` 是**当前**副本数，``target_replicas`` 是这次变更**之后**会变成多少。
+    两个都要有：把 3 缩到 1 和把 3 扩到 10，在卡片上长得一模一样的话，
+    操作员看到「影响副本 3 / 是否单点 否」就会以为没事——而改完之后它就是单点了。
+    最需要准确的那张卡片，不能给错信息。
+    """
 
     replicas: int = 0
+    target_replicas: int | None = None
+    pods_added: int = 0
+    pods_removed: int = 0
     stateful: bool = False
     single_point: bool = False
     has_pvc: bool = False
@@ -105,89 +75,91 @@ class Impact:
     nodes_affected: int = 0
     notes: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class Breach:
-    """熔断规则命中记录。severity=block 表示硬拒绝。"""
-
-    rule: str
-    detail: str
-    severity: str = "block"  # block | escalate | warn
-
-    def render(self) -> str:
-        icon = {"block": "⛔", "escalate": "⚠️", "warn": "•"}.get(self.severity, "•")
-        return f"{icon} {self.rule}: {self.detail}"
+    @property
+    def changes_replica_count(self) -> bool:
+        return self.target_replicas is not None and self.target_replicas != self.replicas
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> "Impact":
+        """从磁盘恢复。
+
+        未知字段一律忽略、缺字段用默认值——这样**旧版本的会话文件在新版本代码上
+        仍然读得出来**。会话是持久化的，结构演进时不该因为加了个字段就全部作废。
+        """
+        if not d:
+            return cls()
+        known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 @dataclass
 class Proposal:
-    """一个已完整评估、但**尚未执行**的动作方案。
+    """一个已评估、但**尚未执行**的动作方案。
 
-    这是审批门禁的核心载体：规划器只能产出 Proposal，不能直接执行。
+    它是审批门禁的核心载体：模型只能产出 Proposal，不能执行任何东西。
     """
 
     tool: str
     params: dict[str, Any]
-    tier: Tier
     target: Target
     rationale: str = ""
-    # 候选动作自带的提示（如"只缓解不根治"）。带上它，界面才能诚实地
-    # 告诉用户"这次执行治不治本"——不说的话，用户看到"成功"却见问题复发，
-    # 会以为系统坏了。
-    note: str = ""
-    evidence: list[Evidence] = field(default_factory=list)
     impact: Impact = field(default_factory=Impact)
     dry_run_ok: bool | None = None
     dry_run_output: str = ""
     rollback: str = ""
-    rollback_eta: str = "未知"
-    breaches: list[Breach] = field(default_factory=list)
-    escalated_to: Tier | None = None  # 被熔断规则升级后的等级（原始等级仍保留在 tier）
     proposal_id: str = field(default_factory=lambda: new_id("prop-"))
-
-    @property
-    def effective_tier(self) -> Tier:
-        """熔断升级后的实际等级。"""
-        if self.escalated_to is None:
-            return self.tier
-        return Tier.max_of(self.tier, self.escalated_to)
-
-    @property
-    def blocked(self) -> bool:
-        return any(b.severity == "block" for b in self.breaches)
-
-    @property
-    def requires_approval(self) -> bool:
-        return self.effective_tier.requires_approval
+    # 提方案那一刻算出来的症状签名。执行成功后用它把这条件记进案例库——
+    # 记的是"当时看到的症状"，不是执行完之后的（执行完症状就没了）。
+    signature: list[str] = field(default_factory=list)
 
     @property
     def dry_run_passed(self) -> bool:
         return self.dry_run_ok is True
+
+    @property
+    def display_command(self) -> str:
+        """给操作员看的一行"这到底要干什么"。不是可执行的 shell，是给人读的摘要。"""
+        parts = [f"{k}={v}" for k, v in self.params.items() if v not in (None, "")]
+        return f"{self.tool}({', '.join(parts)})"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "proposal_id": self.proposal_id,
             "tool": self.tool,
             "params": self.params,
-            "tier": self.tier.value,
-            "effective_tier": self.effective_tier.value,
             "target": self.target.to_dict(),
             "rationale": self.rationale,
-            "evidence": [e.to_dict() for e in self.evidence],
             "impact": self.impact.to_dict(),
             "dry_run_ok": self.dry_run_ok,
             "dry_run_output": self.dry_run_output,
             "rollback": self.rollback,
-            "rollback_eta": self.rollback_eta,
-            "breaches": [b.to_dict() for b in self.breaches],
-            "escalated_to": self.escalated_to.value if self.escalated_to else None,
+            "display_command": self.display_command,
+            "signature": self.signature,
         }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Proposal":
+        """从磁盘恢复。
+
+        注意：恢复出来的 Proposal **只是展示用的记录**。真正执行时仍然会走
+        ``execute_write()`` 的完整门禁（审批凭证匹配 + 重新 dry-run），
+        所以从磁盘读一个方案出来并不构成一条绕过门禁的路径。
+        """
+        return cls(
+            tool=d.get("tool", ""),
+            params=dict(d.get("params") or {}),
+            target=Target.from_dict(d.get("target") or {}),
+            rationale=d.get("rationale", ""),
+            impact=Impact.from_dict(d.get("impact")),
+            dry_run_ok=d.get("dry_run_ok"),
+            dry_run_output=d.get("dry_run_output", ""),
+            rollback=d.get("rollback", ""),
+            proposal_id=d.get("proposal_id") or new_id("prop-"),
+            signature=list(d.get("signature") or []),
+        )
 
 
 @dataclass

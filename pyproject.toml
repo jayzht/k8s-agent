@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omagent"
+version = "1.0.0"
+description = "Kubernetes 运维 Agent —— 只读查询自动执行，写操作必须先拿到人的确认卡片"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+
+# 运行时依赖刻意压到最少：只有 K8s 客户端和 HTTP。
+# 没有 LangChain / 没有向量库 / 没有官方 MCP SDK —— 标准库能做的就不引依赖。
+# 这不是为了"炫技"，是为了让"这个 agent 到底能碰什么"这件事可以被完整读一遍。
+dependencies = [
+    "kubernetes>=29.0.0",
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+# 生成沙箱清单要用 YAML（sandbox/topology.py）
+sandbox = ["pyyaml>=6.0"]
+dev = ["pytest>=8.0", "pyyaml>=6.0"]
+# 前端端到端截图/回归测试用，装在单独的 venv 里
+shots = ["playwright>=1.40"]
+
+[project.scripts]
+omagent = "omagent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+omagent = ["../../web/*", "../../sandbox/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

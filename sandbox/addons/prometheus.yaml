@@ -1,0 +1,313 @@
+# Prometheus —— 真的能查的指标库（单副本 Deployment + ConfigMap 抓取配置）。
+#
+# 为什么需要它：
+#   仓库里 observability/prometheus 是**仿真**服务（om-demo-app:1，只有 /health），
+#   它没有 TSDB、没有 /api/v1/query，任何"去 Prometheus 查一下指标"的动作都拿不到数据。
+#   这个才是真的：带 TSDB、开 HTTP API、真的去抓 kubelet 和 kube-state-metrics。
+#
+# 抓什么（见下面 ConfigMap 的 scrape_configs）：
+#   1. kube-state-metrics  —— 最有用的一路。kube_pod_container_status_restarts_total、
+#      kube_deployment_status_replicas_available 这类"对象状态"指标只有它有。
+#   2. kubelet cAdvisor     —— 容器级 CPU/内存/网络，走 apiserver 代理
+#      /api/v1/nodes/<node>/proxy/metrics/cadvisor
+#   3. kubelet /metrics     —— 节点级资源与运行时指标
+#   4. apiserver            —— 控制面健康度
+#   5. 自己                  —— 确认 Prometheus 自身 up
+#
+# 镜像：本环境访问不了 Docker Hub / registry.k8s.io，镜像由
+#       sandbox/addons/install-monitoring.sh 经华为云镜像站拉取后 kind load 进节点。
+#       因此这里写规范镜像名 + imagePullPolicy: IfNotPresent（节点上已有就不会去外网拉）。
+#
+# API：--web.enable-lifecycle 打开，于是 /api/v1/query、/api/v1/alerts、
+#      /api/v1/targets 以及 POST /-/reload 都可用。
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: om-monitoring
+---
+# 抓 kubelet 只能走 apiserver 代理（nodes/proxy），另需读 endpoints/pods 做服务发现。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: om-monitoring-prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: om-monitoring
+rules:
+- apiGroups: [""]
+  resources: [nodes, nodes/proxy, nodes/metrics, services, endpoints, pods, configmaps, namespaces]
+  verbs: [get, list, watch]
+- nonResourceURLs: ["/metrics"]
+  verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: om-monitoring-prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: om-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: om-monitoring-prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: om-monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: om-sandbox
+        env: sandbox
+
+    rule_files:
+      - /etc/prometheus/rules/*.yaml
+
+    scrape_configs:
+      # ── 自己 ────────────────────────────────────────────────
+      - job_name: prometheus
+        static_configs:
+          - targets: ["localhost:9090"]
+
+      # ── kube-state-metrics：排障真正要用的那一路 ──────────────
+      - job_name: kube-state-metrics
+        static_configs:
+          - targets: ["kube-state-metrics.monitoring.svc.cluster.local:8080"]
+
+      # ── 容器级指标（cAdvisor），经 apiserver 代理到各节点 ──────
+      - job_name: kubernetes-nodes-cadvisor
+        scheme: https
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          # kind 的 kubelet 证书不是集群 CA 签的（和 metrics-server 需要
+          # --kubelet-insecure-tls 是同一个原因），不跳过校验会整个 job 挂掉。
+          insecure_skip_verify: true
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+          # 这几条是 kube-prometheus 同款降噪：基数大、排障用不上
+          - source_labels: [__name__]
+            regex: container_(network_tcp_usage_total|network_udp_usage_total|tasks_state|cpu_load_average_10s)
+            action: drop
+
+      # ── 节点级 kubelet 指标 ──────────────────────────────────
+      - job_name: kubernetes-nodes-kubelet
+        scheme: https
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics
+
+      # ── 控制面 apiserver ────────────────────────────────────
+      - job_name: kubernetes-apiservers
+        scheme: https
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: default;kubernetes;https
+---
+# 告警规则：有真规则 /api/v1/alerts 才有意义（否则永远是空数组，看不出对错）。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: om-monitoring
+data:
+  om-sandbox.rules.yaml: |
+    groups:
+      - name: om-sandbox.rules
+        rules:
+          - alert: KubePodCrashLooping
+            expr: |
+              max_over_time(kube_pod_container_status_restarts_total[5m])
+                - min_over_time(kube_pod_container_status_restarts_total[5m]) > 0
+            for: 1m
+            labels:
+              severity: warning
+            annotations:
+              summary: "容器反复重启：{{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }})"
+              description: "过去 5 分钟内新增重启 {{ $value }} 次。"
+
+          - alert: KubeDeploymentReplicasMismatch
+            expr: |
+              kube_deployment_spec_replicas
+                != kube_deployment_status_replicas_available
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "可用副本数不符：{{ $labels.namespace }}/{{ $labels.deployment }}"
+              description: "期望 {{ $value }} 个，但实际可用数对不上。"
+
+          - alert: KubePodNotReady
+            expr: |
+              sum by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown|Failed"}) > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod 长时间非 Running：{{ $labels.namespace }}/{{ $labels.pod }}"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: om-monitoring
+spec:
+  selector:
+    app.kubernetes.io/name: prometheus
+  ports:
+  - name: http
+    port: 9090
+    targetPort: http
+    protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: om-monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  strategy:
+    # 单副本 + emptyDir，滚动更新会让 TSDB 丢一次；用 Recreate 语义更诚实。
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+        app.kubernetes.io/part-of: om-monitoring
+    spec:
+      serviceAccountName: prometheus
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: prometheus
+        image: prom/prometheus:v2.55.1
+        # 镜像由 install-monitoring.sh 预加载进 kind 节点；节点上没有才会去外网拉。
+        imagePullPolicy: IfNotPresent
+        args:
+        - --config.file=/etc/prometheus/prometheus.yml
+        - --storage.tsdb.path=/prometheus
+        # ⚠️ 保留期和内存上限是绑在一起的两件事，别只调其中一个。
+        #
+        # 踩过的坑：一开始留 24h、内存限 1Gi，跑了大半天之后 Prometheus 变成
+        # CrashLoopBackOff（40 次重启，lastState=OOMKilled exit=137）。
+        # 原因不是"平时占得多"，而是**启动时要重放 WAL**：沙箱有 25 个工作负载
+        # 在持续产生指标，WAL 攒到 41 个 segment，重启时把整段 WAL 读进内存
+        # 就超了 1Gi → 被杀 → 再重放 → 再被杀，永远起不来。
+        #
+        # 沙箱集群有 5×128Gi 的余量，所以这里两头都调：
+        # 保留期收到 6h（演示够用，WAL 小一个量级），内存给到 2Gi。
+        - --storage.tsdb.retention.time=6h
+        - --web.listen-address=:9090
+        # 没有这行就没有 POST /-/reload，也不保证 lifecycle 相关端点可用
+        - --web.enable-lifecycle
+        ports:
+        - name: http
+          containerPort: 9090
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            # 2Gi 而不是 1Gi：启动时重放 WAL 是内存峰值，不是稳态。
+            # 1Gi 会让它在跑了几小时后陷入 OOM → 重放 → OOM 的死循环。
+            memory: 2Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: config
+          mountPath: /etc/prometheus
+          readOnly: true
+        - name: rules
+          mountPath: /etc/prometheus/rules
+          readOnly: true
+        - name: data
+          mountPath: /prometheus
+      volumes:
+      - name: config
+        configMap:
+          name: prometheus-config
+      - name: rules
+        configMap:
+          name: prometheus-rules
+      # emptyDir：沙箱里 TSDB 不需要跨 Pod 生命周期存活，免得再引入 PVC。
+      # 需要留存历史时把它换成 PVC（local-path StorageClass 已就绪）。
+      - name: data
+        emptyDir: {}

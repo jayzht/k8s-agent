@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # HolmesGPT 基座 Spike：在独立 venv 中安装，避免污染主环境。
 set -euo pipefail
-ROOT="/home/ubuntu/O&M-agent"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-export https_proxy=http://172.26.192.221:7890
-export http_proxy=http://172.26.192.221:7890
+# 需要代理请自行 export，脚本不写死内网地址
 
 if [ ! -d .venv-holmes ]; then python3 -m venv .venv-holmes; fi
 source .venv-holmes/bin/activate

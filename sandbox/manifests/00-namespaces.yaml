@@ -1,0 +1,32 @@
+# ⚠️ 本文件由 sandbox/topology.py 生成，不要手工修改。
+# 改拓扑请改 topology.py 里的表，然后重新运行：
+#     python sandbox/topology.py && kubectl apply -f sandbox/manifests/
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+  labels:
+    omagent.io/managed: "true"
+  annotations:
+    omagent.io/note: "业务演示：主系统"
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+  labels:
+    omagent.io/managed: "true"
+  annotations:
+    omagent.io/note: "预发：配额收紧"
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    omagent.io/managed: "true"
+  annotations:
+    omagent.io/note: "监控组件"

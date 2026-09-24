@@ -1,0 +1,283 @@
+/* 集群大屏 —— 给挂在墙上的那台显示器用。
+ *
+ * 和监控台的区别不是"内容更多"，是**用途不同**：
+ *   · 监控台：坐在工位上排查，可以点、可以问，信息密度可以高、字号可以小
+ *   · 大屏：三米外扫一眼，不能滚动、不能点击、字要大、颜色要能一眼分好坏
+ *
+ * 所以这里：整屏不滚动（内部面板各自滚）、字号普遍放大、异常用高饱和色 + 呼吸动画。
+ */
+
+:root {
+  --bg: #070a0f;
+  --panel: #0e131b;
+  --panel-2: #141b26;
+  --border: #1e2836;
+  --text: #e8edf5;
+  --muted: #7b8a9e;
+  --good: #2ee88a;
+  --warn: #ffb020;
+  --bad: #ff4d4d;
+  --accent: #4c9dff;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body {
+  height: 100%; margin: 0; overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+/* 大屏适配：整块屏按 1920×1080 设计，再用 transform 等比缩放到实际分辨率。
+   这样任何屏幕上布局都和验证过的完全一致，永远不会滚、也不会裁。
+   （大屏的通用做法；比逐个断点调字号可靠得多。） */
+#stage {
+  position: fixed; inset: 0; overflow: hidden;
+  background: radial-gradient(1400px 700px at 50% -15%, #101a28 0%, var(--bg) 65%);
+}
+#canvas {
+  width: 1920px; height: 1080px;
+  transform-origin: 0 0;
+  display: flex; flex-direction: column;
+  padding: 0 18px 16px;
+  position: absolute; left: 0; top: 0;
+}
+
+/* ── 顶栏 ─────────────────────────────────────────────── */
+.bar {
+  display: flex; align-items: center; gap: 20px;
+  padding: 12px 4px; flex: none;
+}
+.bar-left { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.logo { color: var(--accent); font-size: 20px; }
+.bar-left strong { font-size: 21px; letter-spacing: .5px; }
+.bar-mid { flex: 1; text-align: center; }
+.bar-right { display: flex; align-items: center; gap: 12px; }
+.clock { font-family: var(--mono); font-size: 22px; letter-spacing: 1px; color: #cfe0f5; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+
+.pill {
+  display: inline-block; padding: 5px 18px; border-radius: 999px;
+  font-weight: 700; font-size: 16px; letter-spacing: .5px;
+  border: 1px solid var(--border); background: var(--panel);
+}
+.pill.ok { color: var(--good); border-color: #1c5c3c; background: #0c1f17; }
+.pill.bad { color: var(--bad); border-color: #6b2020; background: #221010;
+            animation: pulse 2s ease-in-out infinite; }
+.pill.warn { color: var(--warn); border-color: #6b4d16; background: #211a0c; }
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,77,77,.45); }
+  50% { box-shadow: 0 0 0 9px rgba(255,77,77,0); }
+}
+
+.ghost {
+  background: var(--panel-2); color: var(--text); text-decoration: none;
+  border: 1px solid var(--border); border-radius: 7px;
+  padding: 6px 14px; font-size: 14px; cursor: pointer;
+}
+.ghost:hover { border-color: var(--accent); }
+
+/* ── KPI ──────────────────────────────────────────────── */
+.kpis {
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px;
+  flex: none; margin-bottom: 12px;
+}
+.kpi {
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 16px; min-width: 0;
+}
+.kpi .k-label { font-size: 13px; color: var(--muted); letter-spacing: .5px; }
+.kpi .k-value {
+  font-size: 38px; font-weight: 700; line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.kpi .k-sub { font-size: 12.5px; color: var(--muted); }
+.kpi.bad { border-color: #6b2020; }
+.kpi.bad .k-value { color: var(--bad); }
+.kpi.warn { border-color: #6b4d16; }
+.kpi.warn .k-value { color: var(--warn); }
+.kpi.ok .k-value { color: var(--good); }
+
+/* ── 面板网格 ─────────────────────────────────────────── */
+.grid {
+  flex: 1; min-height: 0;
+  display: grid; gap: 12px;
+  grid-template-columns: 1.15fr 1.15fr 1fr;
+  grid-template-rows: 1.35fr 1fr;
+}
+.span2 { grid-column: span 2; }
+.span3 { grid-column: span 3; }
+
+.panel {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+}
+.panel h2 {
+  font-size: 14px; font-weight: 600; letter-spacing: .8px;
+  color: #9fb2c8; text-transform: uppercase;
+  margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none;
+}
+.panel-body { flex: 1; overflow: auto; padding: 10px 12px; min-height: 0; }
+/* ⚠️ 这里**不能**用 overflow:hidden。
+   曾经为了"绝不出现滚动条"给节点面板加了 hidden，结果在 1280x720 上
+   直接藏掉两个节点——节点被裁是**看不见的故障**，比多一条滚动条糟得多。
+   现在的做法：面板永远可滚（兜底），同时整块屏按比例缩放（见 wall.js），
+   正常情况下根本不需要滚。 */
+.panel-body.fit { overflow-y: auto; }
+.badge {
+  display: inline-block; min-width: 22px; text-align: center;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 1px 8px; font-size: 12px; color: var(--muted);
+}
+.badge.bad { color: var(--bad); border-color: #6b2020; }
+
+/* ── 工作负载矩阵 ─────────────────────────────────────── */
+.ns-group { margin-bottom: 12px; }
+.ns-head {
+  display: flex; align-items: baseline; gap: 10px;
+  font-size: 13px; color: var(--muted); letter-spacing: .6px;
+  margin: 0 0 7px 2px;
+}
+.ns-head b { color: #cfe0f5; font-size: 14px; }
+.wl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 8px; }
+
+.wl {
+  border: 1px solid var(--border); border-left: 3px solid #2a3a4d;
+  background: var(--panel-2); border-radius: 7px; padding: 7px 10px;
+  min-width: 0;
+}
+.wl.ok { border-left-color: #1c5c3c; }
+.wl.warn { border-left-color: var(--warn); }
+.wl.bad {
+  border-left-color: var(--bad); background: #1c1113; border-color: #46201f;
+  animation: wlpulse 2.6s ease-in-out infinite;
+}
+@keyframes wlpulse {
+  0%, 100% { background: #1c1113; }
+  50% { background: #261618; }
+}
+.wl-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.wl-name {
+  font-size: 14.5px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wl-rep { font-family: var(--mono); font-size: 14px; color: var(--muted); flex: none; }
+.wl.bad .wl-rep { color: var(--bad); font-weight: 700; }
+.wl.warn .wl-rep { color: var(--warn); }
+.wl-sub {
+  font-size: 11.5px; color: var(--muted); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wl.bad .wl-sub { color: #ffb3b3; }
+.wl-case { font-size: 11.5px; color: var(--accent); margin-top: 3px; }
+
+/* ── 节点 ─────────────────────────────────────────────── */
+.node { border-bottom: 1px solid var(--border); padding: 6px 2px; }
+.node:last-child { border-bottom: none; }
+.node-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.node-name { font-size: 14px; font-weight: 600; }
+.node-tags { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+.node-bar { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+.node-bar .lbl { width: 34px; font-size: 11.5px; color: var(--muted); flex: none; }
+.node-bar .track {
+  flex: 1; height: 8px; border-radius: 5px;
+  background: #0a0f16; border: 1px solid var(--border); overflow: hidden;
+}
+.node-bar .fill { height: 100%; background: var(--good); transition: width .5s ease; }
+.node-bar .fill.warn { background: var(--warn); }
+.node-bar .fill.bad { background: var(--bad); }
+.node-bar .pct {
+  width: 40px; text-align: right; font-family: var(--mono);
+  font-size: 12.5px; flex: none; color: var(--muted);
+}
+/* 绝对用量：占比永远是 0% 时，这一列才是真正有信息量的 */
+.node-bar .abs {
+  width: 74px; text-align: right; font-family: var(--mono);
+  font-size: 12.5px; flex: none; color: #b9c9dd;
+}
+.node.off { opacity: .55; }
+.node.off .node-name { color: var(--bad); }
+.node-sched { font-size: 11.5px; color: var(--warn); }
+
+/* ── 告警 ─────────────────────────────────────────────── */
+.alert {
+  border-left: 3px solid var(--bad); background: #1a1013;
+  border-radius: 6px; padding: 8px 11px; margin-bottom: 7px;
+}
+.alert .a-top { display: flex; align-items: baseline; gap: 8px; }
+.alert .a-ns { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.alert .a-name { font-size: 15px; font-weight: 600; }
+.alert .a-rep { margin-left: auto; font-family: var(--mono); font-size: 14px; color: var(--bad); }
+.alert .a-prob { font-size: 12.5px; color: #ffb3b3; margin-top: 3px;
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alert .a-case { font-size: 11.5px; color: var(--accent); margin-top: 3px; }
+.empty { color: var(--muted); font-size: 14px; padding: 14px 4px; text-align: center; }
+.empty.good { color: var(--good); }
+
+/* ── 最近处置 ─────────────────────────────────────────── */
+.act { display: flex; gap: 10px; align-items: baseline; padding: 5px 2px;
+       border-bottom: 1px solid #131a24; font-size: 13.5px; }
+.act:last-child { border-bottom: none; }
+.act .t { font-family: var(--mono); font-size: 12px; color: var(--muted); flex: none; }
+.act .k {
+  flex: none; width: 62px; font-size: 11.5px; text-align: center;
+  border-radius: 4px; padding: 1px 0; border: 1px solid var(--border);
+}
+.act.exec .k { color: var(--good); border-color: #1c5c3c; }
+.act.decision .k { color: var(--accent); border-color: #1d3c63; }
+.act.violation .k { color: var(--bad); border-color: #6b2020; }
+.act.case .k { color: var(--warn); border-color: #6b4d16; }
+.act.fault .k { color: var(--muted); }
+.act .txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 案例 ─────────────────────────────────────────────── */
+.case {
+  padding: 6px 2px; border-bottom: 1px solid #131a24; font-size: 13px;
+}
+.case:last-child { border-bottom: none; }
+.case .c-top { display: flex; align-items: baseline; gap: 8px; }
+.case .c-wl { font-weight: 600; font-size: 14px; }
+.case .c-tool { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.case .c-by { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+.case .c-sym { font-size: 11.5px; color: var(--muted); margin-top: 2px;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── 登录 ─────────────────────────────────────────────── */
+.login-mask {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(4,7,11,.96);
+  display: flex; align-items: center; justify-content: center;
+}
+.login-card {
+  width: min(420px, 92vw); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 12px; padding: 30px 28px;
+}
+.login-card h1 { font-size: 22px; margin: 0 0 10px; }
+.login-card p { margin: 0 0 18px; }
+.login-field { display: block; margin-bottom: 13px; }
+.login-field span { display: block; font-size: 13px; color: var(--muted); margin-bottom: 5px; }
+.login-field input {
+  width: 100%; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 7px; padding: 10px 12px; font: inherit;
+}
+.login-field input:focus { outline: none; border-color: var(--accent); }
+#login-btn {
+  width: 100%; padding: 11px; background: var(--accent); color: #fff;
+  border: none; border-radius: 7px; font-weight: 600; font-size: 15px; cursor: pointer;
+}
+.login-err { color: var(--bad); font-size: 13.5px; margin: 10px 0 0; min-height: 18px; }
+
+/* 数据刷新时轻微闪一下，让人知道它是活的 */
+@keyframes flash { from { opacity: .45; } to { opacity: 1; } }
+.refreshed { animation: flash .5s ease; }
+
+/* 注意：**不要**在这里改栅格。整块屏已经按比例缩放了，
+   改栅格只会让"设计尺寸下验证过的布局"在别的分辨率上失效。
+   早期版本就是在这里把 3 列改成 2 列，导致行数变多、节点被挤出屏幕。 */

@@ -149,25 +149,6 @@ class AuditLog:
 
     # -------------------------------------------------------------- 语义化写入
 
-    def log_intent(self, trace_id: str, operator: str, intent: str) -> AuditRecord:
-        return self.append(
-            "intent",
-            {"trace_id": trace_id, "operator": operator, "intent": intent},
-        )
-
-    def log_diagnosis(
-        self, trace_id: str, operator: str, conclusion: str, evidence: list[dict[str, Any]]
-    ) -> AuditRecord:
-        return self.append(
-            "diagnosis",
-            {
-                "trace_id": trace_id,
-                "operator": operator,
-                "conclusion": conclusion,
-                "evidence": evidence,
-            },
-        )
-
     def log_proposal(self, trace_id: str, operator: str, prop: Proposal) -> AuditRecord:
         """完整记录方案：证据、影响面、dry-run、熔断结果。"""
         return self.append(
@@ -180,21 +161,6 @@ class AuditLog:
 
     def log_execution(self, trace_id: str, result: ExecutionResult) -> AuditRecord:
         return self.append("execution", {"trace_id": trace_id, **result.to_dict()})
-
-    def log_refusal(
-        self, trace_id: str, operator: str, request: str, rule: str, hint: str
-    ) -> AuditRecord:
-        """记录一次拒绝。拒绝也要留痕——这是剧本 2 的证据。"""
-        return self.append(
-            "refusal",
-            {
-                "trace_id": trace_id,
-                "operator": operator,
-                "request": request,
-                "rule": rule,
-                "hint": hint,
-            },
-        )
 
     # ------------------------------------------------------------------ 校验
 

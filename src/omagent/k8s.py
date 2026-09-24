@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 from dataclasses import dataclass, field
 from typing import Any
@@ -70,6 +71,82 @@ class PodInfo:
         return ""
 
 
+# ---------------------------------------------------------------------------
+# K8s 数量串解析
+#
+# K8s 返回的资源量是带后缀的字符串：``213603259n``（纳核）、``941856Ki``、
+# ``1500m``、``2Gi``……不解析就只能原样显示，人和模型都看不出"到底用了多少"。
+# ---------------------------------------------------------------------------
+
+_QTY_SUFFIX = {
+    "": 1, "n": 1e-9, "u": 1e-6, "m": 1e-3,
+    "k": 1e3, "M": 1e6, "G": 1e9, "T": 1e12, "P": 1e15,
+    "Ki": 1024, "Mi": 1024 ** 2, "Gi": 1024 ** 3, "Ti": 1024 ** 4, "Pi": 1024 ** 5,
+}
+
+
+def coerce_text(data: Any) -> str:
+    """把日志端点的返回体规整成真正的 UTF-8 文本。
+
+    正常情况下我们拿到的是 bytes（见 ``_read_log``）。保底分支处理的是
+    kubernetes 客户端在某些版本上的行为：它把 text/plain 的响应体当成
+    ``response_type="str"`` 反序列化，于是 ``str(b'...')`` 产生了「字节串 repr」
+    字符串——真实换行退化成字面量 ``\\n``，非 ASCII 退化成 ``\\xNN`` 转义。
+    这种字符串会让 Agent 读到乱码、让注入检测器看不到中文，所以必须还原。
+
+    只在能精确往返（``repr(还原结果) == 原字符串``）时才替换，避免把一条
+    恰好以 ``b'`` 开头的正常日志误判成 repr。
+    """
+    if isinstance(data, (bytes, bytearray)):
+        return bytes(data).decode("utf-8", errors="replace")
+    if not isinstance(data, str):
+        return str(data)
+    if data[:1] != "b" or data[1:2] not in ("'", '"') or data[-1:] != data[1:2]:
+        return data
+    if "\\" not in data:
+        return data
+    try:
+        recovered = ast.literal_eval(data)
+    except (ValueError, SyntaxError):
+        return data
+    if isinstance(recovered, bytes) and repr(recovered) == data:
+        return recovered.decode("utf-8", errors="replace")
+    return data
+
+
+def parse_quantity(text: str | int | float | None) -> float:
+    """把 ``1500m`` / ``2Gi`` / ``941856Ki`` 这类串解析成浮点数。
+
+    解析不了就返回 0——指标缺失不该让整个面板塌掉。
+    """
+    if text is None:
+        return 0.0
+    if isinstance(text, (int, float)):
+        return float(text)
+    raw = str(text).strip()
+    if not raw:
+        return 0.0
+    # 后缀从长到短匹配，先试 Ki/Mi/Gi 再试 k/M/G，否则 "Gi" 会被 "G" 吃掉
+    for suffix in sorted(_QTY_SUFFIX, key=len, reverse=True):
+        if suffix and raw.endswith(suffix):
+            try:
+                return float(raw[: -len(suffix)]) * _QTY_SUFFIX[suffix]
+            except ValueError:
+                return 0.0
+    try:
+        return float(raw)
+    except ValueError:
+        return 0.0
+
+
+def human_bytes(num: float) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(num) < 1024 or unit == "TiB":
+            return f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
+        num /= 1024
+    return f"{num:.1f} TiB"
+
+
 class K8sClient:
     """参数化的 K8s 访问封装。"""
 
@@ -95,8 +172,16 @@ class K8sClient:
         self.core = client.CoreV1Api()
         self.apps = client.AppsV1Api()
         self.autoscaling = client.AutoscalingV1Api()
+        # HPA 的 conditions 只有 **v2** 才暴露。用 v1 读到的
+        # V1HorizontalPodAutoscalerStatus 上根本没有 conditions 属性——
+        # 读取时会抛 AttributeError，把"HPA 失效了"这个信号整个吞掉。
+        self.autoscaling_v2 = client.AutoscalingV2Api()
+        # metrics.k8s.io 是聚合 API，走 CustomObjects 而不是某个类型化客户端
+        self.custom = client.CustomObjectsApi()
         self.policy_api = client.PolicyV1Api()
         self.networking = client.NetworkingV1Api()
+        # 自检用：问 API Server "我能不能干这个"，比自己试一次干净（无副作用）
+        self.authz = client.AuthorizationV1Api()
 
     # ------------------------------------------------------------------ 探活
 
@@ -106,6 +191,20 @@ class K8sClient:
             return True, f"Kubernetes {ver.git_version}"
         except Exception as exc:  # noqa: BLE001
             return False, str(exc)
+
+    def metrics_available(self) -> bool:
+        """装没装 metrics-server。
+
+        没装的话 get_metrics 会返回空，而"内存够不够"恰恰是最常被问的问题——
+        自检要能提前说清楚，而不是等人问了才发现查不到。
+        """
+        try:
+            self.custom.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
+            return True
+        except ApiException:
+            return False
+        except Exception:  # noqa: BLE001
+            return False
 
     def namespaces(self) -> list[str]:
         return [ns.metadata.name for ns in self.core.list_namespace().items]
@@ -222,24 +321,40 @@ class K8sClient:
         out.sort(key=lambda x: (x["last_seen"] or ""), reverse=True)
         return out
 
+    def _read_log(self, pod: str, namespace: str, container: str, tail: int, previous: bool) -> str:
+        """读取容器日志，绕开客户端对 text/plain 的错误反序列化。
+
+        kubernetes 客户端把日志端点的响应当作 response_type="str" 处理，会走
+        __deserialize_primitive → str(bytes)，得到的是「字节串的 repr」字符串：
+        真实换行变成字面量 \\n，非 ASCII 变成 \\xNN 转义。结果是 Agent 读到乱码，
+        且注入检测器完全看不到中文。用 _preload_content=False 取原始字节自行解码。
+        """
+        resp = self.core.read_namespaced_pod_log(
+            pod,
+            namespace,
+            container=container or None,
+            tail_lines=tail,
+            timestamps=False,
+            previous=previous,
+            _preload_content=False,
+        )
+        try:
+            return coerce_text(getattr(resp, "data", resp))
+        finally:
+            release = getattr(resp, "release_conn", None)
+            if callable(release):
+                release()
+
     def pod_logs(self, namespace: str, pod: str, container: str = "", tail: int = 100) -> str:
         try:
-            return self.core.read_namespaced_pod_log(
-                pod,
-                namespace,
-                container=container or None,
-                tail_lines=tail,
-                timestamps=False,
-            )
+            return self._read_log(pod, namespace, container, tail, previous=False)
         except ApiException as exc:
             raise K8sUnavailable(f"读取日志失败: {exc.reason}") from exc
 
     def previous_pod_logs(self, namespace: str, pod: str, container: str = "", tail: int = 50) -> str:
         """读取上一个容器实例的日志——排查 CrashLoopBackOff 的关键。"""
         try:
-            return self.core.read_namespaced_pod_log(
-                pod, namespace, container=container or None, tail_lines=tail, previous=True
-            )
+            return self._read_log(pod, namespace, container, tail, previous=True)
         except ApiException as exc:
             return f"<无法读取上一次实例日志: {exc.reason}>"
 
@@ -500,6 +615,7 @@ class K8sClient:
                 for c in ((n.status.conditions or []) if n.status else [])
                 if c.type in self.PRESSURE_CONDITIONS
             }
+            alloc = getattr(n.status, "allocatable", None) or {}
             out.append({
                 "name": n.metadata.name,
                 "unschedulable": bool(n.spec.unschedulable),
@@ -507,8 +623,107 @@ class K8sClient:
                 "conditions": conds,
                 "pressured": [k for k, v in conds.items() if v == "True"],
                 "taints": [t.key for t in (n.spec.taints or [])],
+                # 可分配量用来算利用率，大屏上的百分比就靠它
+                "cpu_allocatable": parse_quantity(alloc.get("cpu")),
+                "mem_allocatable": parse_quantity(alloc.get("memory")),
+                "ready": any(
+                    c.type == "Ready" and c.status == "True"
+                    for c in ((n.status.conditions or []) if n.status else [])
+                ),
             })
         return out
+
+    # ------------------------------------------------------------ 资源用量
+    #
+    # 数据来自 metrics-server（经 metrics.k8s.io 的 CRD 接口）。
+    # 没装 metrics-server 时这个接口不存在，这里**返回空而不是抛异常**——
+    # 大屏少一块指标，总好过整页打不开。
+
+    def node_usage(self) -> dict[str, dict[str, Any]]:
+        try:
+            items = self.custom.list_cluster_custom_object(
+                "metrics.k8s.io", "v1beta1", "nodes"
+            ).get("items", [])
+        except Exception:  # noqa: BLE001
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for n in items:
+            usage = n.get("usage") or {}
+            out[n.get("metadata", {}).get("name", "")] = {
+                "cpu_cores": parse_quantity(usage.get("cpu")),
+                "mem_bytes": parse_quantity(usage.get("memory")),
+            }
+        return out
+
+    def pod_usage(self, namespace: str) -> dict[str, dict[str, Any]]:
+        """每个 Pod 的当前用量（多容器求和）。"""
+        try:
+            items = self.custom.list_namespaced_custom_object(
+                "metrics.k8s.io", "v1beta1", namespace, "pods"
+            ).get("items", [])
+        except Exception:  # noqa: BLE001
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for p in items:
+            cpu = mem = 0.0
+            for c in (p.get("containers") or []):
+                u = c.get("usage") or {}
+                cpu += parse_quantity(u.get("cpu"))
+                mem += parse_quantity(u.get("memory"))
+            out[p.get("metadata", {}).get("name", "")] = {
+                "cpu_cores": cpu, "mem_bytes": mem,
+            }
+        return out
+
+    def describe_metrics(self, namespace: str, top: int = 10) -> str:
+        """给模型看的资源用量摘要：谁在吃内存、离上限还有多远。"""
+        usage = self.pod_usage(namespace)
+        if not usage:
+            return ("拿不到资源指标（metrics-server 可能没装或还没采集到数据）。"
+                    "这种情况下不要猜用量，改用重启次数、退出码、事件这些信号。")
+        try:
+            pods = {p.name: p for p in self.list_pods(namespace)}
+        except Exception:  # noqa: BLE001
+            pods = {}
+
+        rows = sorted(usage.items(), key=lambda kv: kv[1]["mem_bytes"], reverse=True)
+        lines = [f"命名空间 {namespace} 的内存占用前 {min(top, len(rows))} 名："]
+        for name, u in rows[:top]:
+            limit = parse_quantity(getattr(pods.get(name), "memory_limit", "") or "")
+            mem = u["mem_bytes"]
+            pct = f"（占上限 {mem / limit * 100:.0f}%）" if limit else ""
+            lines.append(
+                f"  {name}: 内存 {human_bytes(mem)}{pct}  CPU {u['cpu_cores'] * 1000:.0f}m"
+            )
+
+        # 离上限最近的几个最值得看——OOM 往往就出在这里
+        near = [
+            (name, u["mem_bytes"] / parse_quantity(p.memory_limit))
+            for name, u in rows
+            if (p := pods.get(name)) is not None
+            and parse_quantity(getattr(p, "memory_limit", "") or "") > 0
+        ]
+        near = [(n, r) for n, r in near if r >= 0.8]
+        if near:
+            near.sort(key=lambda x: x[1], reverse=True)
+            lines.append("⚠️ 已经用掉内存上限 80% 以上的：")
+            for n, r in near[:5]:
+                lines.append(f"  {n}: {r * 100:.0f}%")
+
+        lines.append("")
+        lines.append("节点利用率：")
+        nodes = {n["name"]: n for n in self.list_nodes()}
+        for name, u in self.node_usage().items():
+            n = nodes.get(name, {})
+            cpu_a = n.get("cpu_allocatable") or 0
+            mem_a = n.get("mem_allocatable") or 0
+            cpu_pct = f"{u['cpu_cores'] / cpu_a * 100:.0f}%" if cpu_a else "?"
+            mem_pct = f"{u['mem_bytes'] / mem_a * 100:.0f}%" if mem_a else "?"
+            lines.append(
+                f"  {name}: CPU {cpu_pct}  内存 {mem_pct}"
+                + ("（不可调度）" if n.get("unschedulable") else "")
+            )
+        return "\n".join(lines)
 
     def list_resourcequotas(self, namespace: str) -> list[dict[str, Any]]:
         """列出 ResourceQuota 及用量——用于判断"Pod 创建不出来"是不是配额卡住。"""
@@ -523,6 +738,23 @@ class K8sClient:
             exhausted = [k for k, v in hard.items() if used.get(k) == v]
             out.append({"name": q.metadata.name, "hard": hard, "used": used,
                         "exhausted": sorted(exhausted)})
+        return out
+
+    def pods_per_node(self) -> dict[str, int]:
+        """每个节点上压了多少 Pod（**全部命名空间**）。
+
+        只统计应用命名空间会漏掉 kube-system 的组件，让控制面节点显示成 0 个 Pod——
+        大屏上那是误导，不是简化。
+        """
+        try:
+            resp = self.core.list_pod_for_all_namespaces()
+        except Exception:  # noqa: BLE001
+            return {}
+        out: dict[str, int] = {}
+        for p in resp.items:
+            node = getattr(p.spec, "node_name", None)
+            if node:
+                out[node] = out.get(node, 0) + 1
         return out
 
     def pods_on_node(self, node: str) -> list[PodInfo]:
@@ -608,15 +840,20 @@ class K8sClient:
                     for ref in (r.metadata.owner_references or [])
                 )
             ]
-            live = [r for r in owned if (r.spec.replicas or 0) > 0]
             if len(owned) < 2:
                 raise ActionRejected("没有可回滚的历史版本（ReplicaSet 少于 2 个）")
-            live_ids = {r.metadata.name for r in live}
-            candidates = [r for r in owned if r.metadata.name not in live_ids]
-            if not candidates:
-                raise ActionRejected("没有找到非活跃的历史 ReplicaSet，无法回滚")
-            candidates.sort(key=lambda r: r.metadata.creation_timestamp, reverse=True)
-            target = candidates[0]
+
+            # ⚠️ 回滚目标 = **"非最新"的那个版本**，而不是"replicas==0 的那个"。
+            #
+            # 曾经用"replicas==0"来识别历史版本，结果是：
+            # **新版本崩了导致滚动更新卡住时，新旧两个 ReplicaSet 都还有副本，
+            # 于是找不到"非活跃"的 RS → 拒绝回滚。**
+            # 而"新版本崩了"恰恰是最需要回滚的时刻——这个判据把最重要的场景堵死了。
+            #
+            # 正确语义：按创建时间排序，最新的是"当前版本"（无论它健康与否），
+            # 回滚目标是其余里最新的那个。
+            owned.sort(key=lambda r: r.metadata.creation_timestamp, reverse=True)
+            target = owned[1]
             body = {
                 "spec": {
                     "template": client.ApiClient().sanitize_for_serialization(target.spec.template)
@@ -625,7 +862,46 @@ class K8sClient:
             self.apps.patch_namespaced_deployment(name, ns, body, dry_run=dry)
         except ApiException as exc:
             raise ActionRejected(f"rollout undo 被拒绝: {exc.reason}") from exc
-        return f"已回滚 {name} 到上一版本（来源 ReplicaSet: {target.metadata.name}）"
+
+        # ⚠️ 这里用的是 **merge patch**，而 merge patch **删不掉 map 里已有的键**——
+        # 它只能覆盖"新旧模板都有"的字段。所以回滚有两类结果：
+        #   · 改了值（镜像、环境变量的值、探针端口）→ 能滚回去
+        #   · **新增了字段**（比如加了个 nodeSelector、加了个注解）→ **滚不掉**
+        # 后者尤其坑：操作员看到"已回滚"却发现问题还在。
+        # 真实踩到过：pending 剧本（patch 加了 nodeSelector）回滚后 nodeSelector 原封不动。
+        #
+        # dry-run 看不出这个问题（它只校验请求合法性），所以这里**执行后复查**，
+        # 把没滚干净的部分如实报出来。宁可说"回滚不完整"，也不要给一个假的成功。
+        leftover: list[str] = []
+        if dry is None:
+            try:
+                now = self.apps.read_namespaced_deployment(name, ns)
+                want = client.ApiClient().sanitize_for_serialization(target.spec.template)
+                cur = client.ApiClient().sanitize_for_serialization(
+                    now.spec.template
+                ) if now.spec and now.spec.template else {}
+                # 只看"新模板多出来的顶层字段"——值的变化是回滚的正常工作
+                cur_spec = (cur.get("spec") or {})
+                want_spec = (want.get("spec") or {})
+                for key in cur_spec:
+                    if key not in want_spec and cur_spec.get(key):
+                        leftover.append(f"spec.{key}")
+                for c_now, c_want in zip(cur_spec.get("containers") or [],
+                                         want_spec.get("containers") or []):
+                    for key in c_now:
+                        if key not in c_want and c_now.get(key):
+                            leftover.append(f"container.{c_now.get('name')}.{key}")
+            except Exception:  # noqa: BLE001
+                pass
+
+        msg = f"已回滚 {name} 到上一版本（来源 ReplicaSet: {target.metadata.name}）"
+        if leftover:
+            msg += (
+                f"；⚠️ 但回滚**不完整**：{', '.join(sorted(set(leftover))[:4])} "
+                f"在新模板里存在、旧模板里没有，merge patch 删不掉它们。"
+                f"这些字段需要手工处理（kubectl patch --type=json 用 remove 操作）。"
+            )
+        return msg
 
     def _scale(self, ns: str, name: str, kind: str, replicas: int, dry: str | None) -> str:
         body = {"spec": {"replicas": replicas}}
@@ -799,10 +1075,139 @@ class K8sClient:
             "get_endpoints": self._q_endpoints,
             "get_services": self._q_services,
             "get_configmap": self._q_configmap,
+            "get_hpa": self._q_hpa,
+            "get_resourcequota": self._q_resourcequota,
+            "get_replicasets": self._q_replicasets,
+            "get_pvc": self._q_pvc,
+            "get_metrics": self._q_metrics,
         }.get(tool)
         if handler is None:
             raise ActionRejected(f"{tool!r} 不是已实现的只读诊断动作")
         return handler(ns, params)
+
+    def _q_metrics(self, ns: str, params: dict[str, Any]) -> str:
+        """资源用量：谁在吃内存、离上限还有多远、节点忙不忙。"""
+        return self.describe_metrics(ns)
+
+    def _q_hpa(self, ns: str, params: dict[str, Any]) -> str:
+        """读取 HPA 的区间与**状态条件**。
+
+        为什么必须有这个工具：``patch_hpa`` 是写工具，而在此之前没有任何
+        读 HPA 的只读工具——于是出现"改得了一个自己读不了的 HPA"这种荒谬局面。
+        模型只能从事件里猜，而集群里任何一条跟 HPA 沾边的噪音事件都会把它带偏
+        （真实发生过：它把"没装 metrics-server"这条**一直存在**的环境噪音
+        当成了刚发生的故障根因）。
+
+        ⚠️ 必须用 v2 API：v1 的 status 对象上根本没有 ``conditions`` 属性。
+        """
+        name = params.get("name", "")
+        try:
+            if name:
+                items = [self.autoscaling_v2.read_namespaced_horizontal_pod_autoscaler(name, ns)]
+            else:
+                items = list(self.autoscaling_v2.list_namespaced_horizontal_pod_autoscaler(ns).items)
+        except ApiException as exc:
+            if exc.status == 404:
+                return f"命名空间 {ns} 下没有 HPA/{name}"
+            raise ActionRejected(f"读取 HPA 失败: {exc.reason}") from exc
+
+        if not items:
+            return f"命名空间 {ns} 下没有 HorizontalPodAutoscaler"
+
+        out = []
+        for h in items:
+            tgt = getattr(h.spec.scale_target_ref, "name", "?")
+            kind = getattr(h.spec.scale_target_ref, "kind", "?")
+            status = h.status
+            out.append(
+                f"HPA/{h.metadata.name}: 目标={kind}/{tgt} "
+                f"区间=[{h.spec.min_replicas}, {h.spec.max_replicas}] "
+                f"当前副本={getattr(status, 'current_replicas', '?')} "
+                f"期望副本={getattr(status, 'desired_replicas', '?')}"
+            )
+            for m in (h.spec.metrics or []):
+                res = getattr(m, "resource", None)
+                if res is not None:
+                    out.append(
+                        f"  指标: {res.name} 目标利用率="
+                        f"{getattr(getattr(res, 'target', None), 'average_utilization', '?')}%"
+                    )
+            for c in ((status.conditions or []) if status else []):
+                # 只把**异常**的条件标出来，正常的不刷屏
+                if c.status == "True" and c.type not in ("ScalingLimited",):
+                    out.append(f"  ✓ {c.type}: {c.reason}")
+                elif c.status == "False":
+                    out.append(f"  ✗ {c.type}=False: {c.reason} — {(c.message or '')[:200]}")
+        return "\n".join(out)
+
+    def _q_resourcequota(self, ns: str, params: dict[str, Any]) -> str:
+        """读取 ResourceQuota 的硬上限与已用量——判断"Pod 创建不出来"是否卡在配额。"""
+        quotas = self.list_resourcequotas(ns)
+        if not quotas:
+            return f"命名空间 {ns} 下没有 ResourceQuota"
+        out = []
+        for q in quotas:
+            out.append(f"ResourceQuota/{q['name']}:")
+            for k, hard in sorted(q["hard"].items()):
+                used = q["used"].get(k, "-")
+                flag = "  ⚠️ 已用满" if k in q["exhausted"] else ""
+                out.append(f"  {k}: 已用 {used} / 上限 {hard}{flag}")
+        return "\n".join(out)
+
+    def _q_replicasets(self, ns: str, params: dict[str, Any]) -> str:
+        """列出 ReplicaSet 及其所属工作负载与版本。
+
+        ``rollout_undo`` 依赖 ReplicaSet 历史（少于 2 个就没法回滚），
+        在此之前模型看不到有几个历史版本，只能靠猜。
+        """
+        name = params.get("name", "")
+        try:
+            items = self.apps.list_namespaced_replica_set(ns).items
+        except ApiException as exc:
+            raise ActionRejected(f"读取 ReplicaSet 失败: {exc.reason}") from exc
+
+        rows = []
+        for rs in items:
+            owner = next(
+                (o.name for o in (rs.metadata.owner_references or []) if o.kind == "Deployment"),
+                "",
+            )
+            if name and owner != name:
+                continue
+            rev = (rs.metadata.annotations or {}).get("deployment.kubernetes.io/revision", "?")
+            img = ""
+            tmpl = getattr(rs.spec, "template", None)
+            if tmpl is not None and tmpl.spec.containers:
+                img = tmpl.spec.containers[0].image
+            rows.append(
+                f"ReplicaSet/{rs.metadata.name} 属于={owner or '-'} 版本={rev} "
+                f"期望={rs.spec.replicas} 就绪={rs.status.ready_replicas or 0} 镜像={img}"
+            )
+        if not rows:
+            return f"{('Deployment/' + name) if name else '命名空间 ' + ns} 下没有匹配的 ReplicaSet"
+        rows.sort()
+        return "\n".join(rows)
+
+    def _q_pvc(self, ns: str, params: dict[str, Any]) -> str:
+        """列出 PVC 的绑定状态与容量——有状态服务出问题时必看。"""
+        name = params.get("name", "")
+        try:
+            items = self.core.list_namespaced_persistent_volume_claim(ns).items
+        except ApiException as exc:
+            raise ActionRejected(f"读取 PVC 失败: {exc.reason}") from exc
+        out = []
+        for c in items:
+            if name and c.metadata.name != name:
+                continue
+            cap = (c.status.capacity or {}).get("storage", "?") if c.status else "?"
+            sc = getattr(c.spec, "storage_class_name", "") or "-"
+            out.append(
+                f"PVC/{c.metadata.name} 状态={getattr(c.status, 'phase', '?')} "
+                f"容量={cap} storageClass={sc} volume={getattr(c.spec, 'volume_name', '') or '-'}"
+            )
+        if not out:
+            return f"{('PVC/' + name) if name else '命名空间 ' + ns} 下没有 PersistentVolumeClaim"
+        return "\n".join(out)
 
     def _q_pods(self, ns: str, params: dict[str, Any]) -> str:
         selector = params.get("label_selector", "")

@@ -14,3 +14,17 @@ bin/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# ── 认证与凭据：绝对不入库 ────────────────────────
+var/users.json
+var/secret.key
+var/sessions/
+
+# ── 调研临时产物：抓取的网页/源码，不该进仓库 ─────────────
+# 里面是第三方站点的 HTML/CSS 和别的项目源码（含 research-holmesgpt 里
+# HolmesGPT 的文件）。既没有读者价值，把别人的内容重新发布出去也不合适。
+# 这些文件留在本地继续用，只是不提交。
+research/
+research-scratch/
+research-holmesgpt/
+aiops_research/
