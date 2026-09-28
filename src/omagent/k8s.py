@@ -1306,6 +1306,22 @@ class K8sClient:
                     f"requests={dict(res.requests or {}) if res and res.requests else {}}"
                 )
             out.append(f"nodeSelector={dict(tmpl.spec.node_selector or {})}")
+            # 把"最近一次发布改了什么"直接附在这里。
+            #
+            # 为什么要塞进来，而不是单独做一个工具：实测加了一个
+            # get_recent_changes 工具，跑了 15 个场景**一次都没被调用**——
+            # 模型在 29 个工具里沿用训练里的 kubectl 式路径，不会主动试新工具名。
+            # 而 get_workload 几乎每个场景都会调，信息放在这里**不依赖它的自觉**。
+            #
+            # 局部 import 避免循环依赖（changehistory 依赖本模块）。
+            try:
+                from .changehistory import summarize_recent_changes
+
+                extra = summarize_recent_changes(self, ns, kind, name)
+                if extra:
+                    out.append(extra)
+            except Exception:  # noqa: BLE001
+                pass   # 变更摘要拿不到不该让整个查询失败
         return "\n".join(out)
 
     def _q_services(self, ns: str, params: dict[str, Any]) -> str:

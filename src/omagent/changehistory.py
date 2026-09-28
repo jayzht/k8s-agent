@@ -214,3 +214,36 @@ class ChangeHistoryProvider(Provider):
                 lines.append(f"      …… 另有 {len(diffs) - MAX_DIFFS} 处")
 
         return "\n".join(lines)
+
+
+# 内联摘要最多列几条差异。get_workload 是高频工具，塞太多会把别的证据挤掉；
+# 想看全的可以再调 get_recent_changes。
+INLINE_MAX_DIFFS = 6
+
+
+def summarize_recent_changes(k8s: K8sClient, ns: str, kind: str, name: str) -> str:
+    """给 ``get_workload`` 用的一小段变更摘要。没有可比的版本就返回空串。
+
+    实测教训：单独立一个工具，模型**一次都不会调**。塞进它本来就会调的
+    ``get_workload`` 里，信息才真的到达模型。
+    """
+    provider = ChangeHistoryProvider(k8s, ns)
+    try:
+        w = k8s.read_workload(ns, kind, name)
+    except Exception:  # noqa: BLE001
+        return ""
+    versions = provider._replicasets(ns, w)
+    if len(versions) < 2:
+        return ""
+    (prev_rev, prev_rs), (rev, rs) = versions[-2], versions[-1]
+    diffs = diff(_pod_spec(prev_rs.spec.template), _pod_spec(rs.spec.template))
+    if not diffs:
+        return ""
+    lines = [f"最近一次发布（版本 {prev_rev} → {rev}）改了这些："]
+    for path, a, b in diffs[:INLINE_MAX_DIFFS]:
+        lines.append(f"    {path}: {a} → {b}")
+    if len(diffs) > INLINE_MAX_DIFFS:
+        lines.append(f"    …… 另有 {len(diffs) - INLINE_MAX_DIFFS} 处，"
+                     f"需要完整列表就调 get_recent_changes")
+    lines.append("    （如果症状出现在这次发布之后，优先考虑把变更退回去）")
+    return "\n".join(lines)
