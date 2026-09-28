@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import threading
 from typing import Any
 
@@ -66,6 +67,12 @@ class McpClientProvider(Provider):
         self.allow_readonly = set(allow_readonly)
         self.timeout = timeout
         self._proc: subprocess.Popen | None = None
+        # 子进程的 stderr 写进临时文件而不是 DEVNULL：
+        # MCP server 起不来时（包没装、路径不对、参数错），原因**只在 stderr 里**。
+        # 丢掉它，用户看到的就是一句"对端提前退出了"——这个功能本来就是要让人
+        # 自己接外部工具，起不来看不到原因等于不能用。
+        # 用文件而不是 PIPE：有些 server 会往 stderr 打大量日志，PIPE 会写满阻塞。
+        self._errfile = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
         self._lock = threading.Lock()
         self._rpc_id = 0
         self._remote_tools: list[dict[str, Any]] = []
@@ -81,7 +88,7 @@ class McpClientProvider(Provider):
             self._proc = subprocess.Popen(
                 self.command,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                stderr=self._errfile, text=True, bufsize=1,
             )
         except (OSError, ValueError) as exc:
             raise ProviderError(f"起不来：{exc}") from exc
@@ -113,7 +120,7 @@ class McpClientProvider(Provider):
             while True:
                 line = self._proc.stdout.readline()
                 if not line:
-                    raise ProviderError("对端提前退出了")
+                    raise ProviderError(f"对端提前退出了{self._stderr_tail()}")
                 line = line.strip()
                 if not line:
                     continue
@@ -183,6 +190,17 @@ class McpClientProvider(Provider):
             result = self._rpc("tools/call", {"name": remote_name, "arguments": args})
             return self._render(result)
         return call
+
+    def _stderr_tail(self, lines: int = 6) -> str:
+        """把子进程 stderr 的最后几行附到错误里——不然"起不来"等于没说。"""
+        try:
+            self._errfile.seek(0)
+            tail = [ln.rstrip() for ln in self._errfile if ln.strip()][-lines:]
+        except Exception:  # noqa: BLE001
+            return ""
+        if not tail:
+            return ""
+        return "\n    对端 stderr：" + "\n      ".join(tail)
 
     @staticmethod
     def _render(result: dict[str, Any]) -> str:

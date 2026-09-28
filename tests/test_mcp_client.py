@@ -194,3 +194,32 @@ def test_配置文件坏了不影响启动(tmp_path):
     p = tmp_path / "mcp.json"
     p.write_text("{ 这不是 JSON", encoding="utf-8")
     assert McpServerStore(p).load() == []
+
+
+def test_起不来时要把对端的_stderr_带出来():
+    """回归：stderr 曾经被丢进 DEVNULL。
+
+    后果是外部 server 起不来时只报一句"对端提前退出了"——而**原因只在 stderr 里**
+    （包没装、路径不对、npm 代理没配、缓存目录只读…）。
+    对一个"让用户自己接外部工具"的功能来说，起不来看不到原因等于不能用。
+
+    真实踩到：接了真的 npm MCP server，先报"对端提前退出"，
+    把 stderr 接出来才看到 npm 的 ECONNREFUSED / EROFS。
+    """
+    p = McpClientProvider(
+        "broken",
+        [sys.executable, "-c",
+         "import sys; sys.stderr.write('npm error ECONNREFUSED 127.0.0.1:7890\\n'); sys.exit(1)"],
+    )
+    ok, why = p.available()
+    assert ok is False
+    assert "ECONNREFUSED" in why, f"stderr 没被带出来：{why!r}"
+    assert "stderr" in why
+
+
+def test_没输出_stderr_时也不报错():
+    """对端什么都不输出就退出，不能因此再炸一次。"""
+    p = McpClientProvider("silent", [sys.executable, "-c", "raise SystemExit(1)"])
+    ok, why = p.available()
+    assert ok is False
+    assert "提前退出" in why
