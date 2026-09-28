@@ -769,10 +769,69 @@ function fmtPayload(p) {
   return JSON.stringify(clone, null, 2);
 }
 
-async function openAudit() {
+/** 数据源面板。
+ *
+ * 为什么要有这个：数据源是**服务端启动时装配**的（Prometheus / Loki /
+ * 外部 MCP server），缺了哪个、为什么缺、有哪些工具没被导入，全在启动横幅里——
+ * 终端里能看到，页面上看不到。接了外部 MCP server 之后这个问题更明显：
+ * 配了却没连上，人在界面上只会觉得"怎么没有工具"，无从判断。
+ *
+ * 所以抽屉里分三段：内置 K8s、已连上的数据源、没连上的（带原因）。
+ */
+function openDrawer(title) {
+  // 抽屉是共用的，标题必须跟着面板走——写死成"审计记录"的话，
+  // 点"数据源"也会顶着"审计记录"，看着像点错了。
+  $('drawer-title').textContent = title;
   $('drawer').hidden = false;
   $('drawer-mask').hidden = false;
   $('drawer-body').innerHTML = '<p class="muted">加载中…</p>';
+}
+
+async function openSources() {
+  openDrawer('数据源与工具');
+  try {
+    const s = await api('GET', '/api/status');
+    const builtin = (s.tools || []).filter((t) => !t.provider);
+    const read = builtin.filter((t) => !t.mutating).length;
+    const write = builtin.length - read;
+    const provs = s.providers || [];
+
+    const rows = provs.map((p) => {
+      if (!p.available) {
+        return `<div class="src bad">
+          <div class="src-head"><span class="src-dot bad"></span>
+            <strong>${esc(p.name)}</strong><span class="muted small">未接入</span></div>
+          <div class="src-why">${esc(p.reason || '未知原因')}</div>
+        </div>`;
+      }
+      const skipped = (p.skipped || []).map(([n, why]) =>
+        `<div class="src-skip">${esc(n)} — ${esc(why)}</div>`).join('');
+      return `<div class="src">
+        <div class="src-head"><span class="src-dot ok"></span>
+          <strong>${esc(p.name)}</strong>
+          <span class="muted small">${p.tools} 个只读工具</span></div>
+        ${skipped ? `<div class="src-skips"><div class="muted small">未导入：</div>${skipped}</div>` : ''}
+      </div>`;
+    }).join('');
+
+    $('drawer-body').innerHTML = `
+      <div class="src">
+        <div class="src-head"><span class="src-dot ok"></span>
+          <strong>内置 Kubernetes</strong>
+          <span class="muted small">${builtin.length} 个工具</span></div>
+        <div class="src-why muted">只读 ${read} 个（自动执行）· 写 ${write} 个（必须人工批准）</div>
+      </div>
+      ${rows || '<p class="muted">没有接入任何外部数据源。</p>'}
+      <p class="note muted small">外部数据源一律只读；写操作只能来自内置的
+        ${write} 个工具，且都要人工批准。外部 MCP 工具默认不导入，需要在启动时
+        用 --mcp-allow-read 点名。</p>`;
+  } catch (e) {
+    $('drawer-body').innerHTML = `<p class="note err">${esc(e.message)}</p>`;
+  }
+}
+
+async function openAudit() {
+  openDrawer('审计记录');
   try {
     const data = await api('GET', '/api/audit?limit=60');
     const v = data.verify || {};
@@ -804,6 +863,13 @@ async function loadStatus() {
       ? `${s.cluster.info} · 模型 ${s.llm.model}${s.llm.available ? '' : '（未配置）'}`
       : `集群不可达：${s.cluster.info}`;
     $('demo-wrap').hidden = !s.demo;
+    const provs = s.providers || [];
+    const up = provs.filter((p) => p.available).length;
+    $('src-count').textContent = up ? `${up}` : '0';
+    $('btn-sources').title = up
+      ? `已接入 ${up} 个外部数据源：${provs.filter((p) => p.available).map((p) => p.name).join('、')}`
+      : '没有接入外部数据源（点开看详情）';
+    $('src-count').className = `src-count${up ? '' : ' off'}`;
     state.scenarios = s.scenarios || [];
     renderFaultTarget();
     renderFaultMenu();
@@ -843,6 +909,7 @@ function bind() {
   });
   $('btn-refresh').addEventListener('click', () => { loadConsole(); loadStatus(); });
   $('btn-audit').addEventListener('click', openAudit);
+  $('btn-sources').addEventListener('click', openSources);
   $('drawer-close').addEventListener('click', closeAudit);
   $('drawer-mask').addEventListener('click', closeAudit);
 

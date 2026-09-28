@@ -40,6 +40,11 @@ class _FakeAgent:
         self.k8s = FakeConsoleK8s()
         self.write_namespaces = ("demo",)
         self.cases = None   # 没配案例库 = 没有语义记忆
+        # 数据源。用真的空注册表而不是再造一个假对象——
+        # 这样接口一变，这里会跟着一起报错，而不是悄悄返回一个形状不对的东西。
+        from omagent.providers import ProviderRegistry
+
+        self.providers = ProviderRegistry()
 
     def cluster_status(self):
         return True, "fake-k8s"
@@ -837,3 +842,70 @@ def test_doctor_can_i_异常时判为不允许():
     ok, reason = _can_i(_K8s(), "list", "", "pods", "demo")
     assert ok is False
     assert "检查失败" in reason
+
+
+# ---------------------------------------------------------------------------
+# 数据源面板
+#
+# 数据源是服务端启动时装配的，缺了哪个、哪些工具没导入，原来只有**终端横幅**
+# 能看到。接了外部 MCP server 之后这个缺口更明显：配了没连上，
+# 界面上只显示"没有工具"，人无从判断。
+# ---------------------------------------------------------------------------
+
+
+def test_status_带上数据源(server):
+    """页面要能拿到"接了什么、哪些跳过了、为什么"。"""
+    base, _ = server
+    c = Client(base)
+    c.login("zhang.wei", "ops-pass-2026")
+    code, body = c.get("/api/status")
+    assert code == 200
+    assert "providers" in body, "status 里没有数据源信息，页面就无从显示"
+    assert isinstance(body["providers"], list)
+
+
+def test_数据源里能看到不可用的原因():
+    """不可用的源必须带原因——只显示"未接入"等于没说。"""
+    from omagent.providers import Provider, ProviderRegistry
+
+    class Down(Provider):
+        name = "github-mcp"
+
+        def available(self):
+            return False, "起不来：npx 不在 PATH 里"
+
+        def tools(self):
+            return []
+
+    st = ProviderRegistry([Down()]).status()
+    assert len(st) == 1
+    assert st[0]["available"] is False
+    assert "npx" in st[0]["reason"], "原因要原样带出去，不能被吞掉"
+
+
+def test_跳过的外部工具要能被界面解释():
+    """MCP：连上了、但不给白名单就一个都不导入。
+
+    界面上必须能说清"为什么一个都没有"，否则看起来像坏了。
+    """
+    from omagent.providers import Provider, ProviderTool, ProviderRegistry
+    from omagent.tools import ToolSpec
+
+    class Partial(Provider):
+        name = "fs"
+
+        def available(self):
+            return True, "2 个工具，其中 1 个已在白名单"
+
+        def tools(self):
+            return [ProviderTool(ToolSpec("fs__read", False, "读"),
+                                 call=lambda p: "x")]
+
+        def describe(self):
+            return {"name": self.name,
+                    "skipped": [("write_file", "没在只读白名单里（默认不导入）")]}
+
+    st = ProviderRegistry([Partial()]).status()
+    assert st[0]["tools"] == 1
+    assert st[0]["skipped"][0][0] == "write_file"
+    assert "白名单" in st[0]["skipped"][0][1]

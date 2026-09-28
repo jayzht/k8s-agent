@@ -400,6 +400,10 @@ class App:
             "namespace": self.default_namespace,
             "demo": self.demo_mode,
             "tools": self.agent.ui_tools(),
+            # 数据源（内置 K8s + Prometheus/Loki + 外部 MCP）。
+            # 页面要能看到"接了什么、哪些跳过了、为什么"——否则服务端明明
+            # 报了一堆原因，人在界面上却只看到"没有工具"。
+            "providers": self.agent.providers.status(),
             "forbidden": FORBIDDEN,
             "write_namespaces": list(self.agent.write_namespaces),
             "scenarios": self.scenario_menu(),

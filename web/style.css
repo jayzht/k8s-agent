@@ -475,3 +475,29 @@ select, .ghost {
   .layout { grid-template-columns: 1fr; grid-template-rows: 40vh 1fr; }
   .console { border-right: none; border-bottom: 1px solid var(--border); }
 }
+
+/* ── 数据源面板 ────────────────────────────────────────────
+   数据源是服务端启动时装配的，缺了哪个、为什么缺，原来只有终端能看到。
+   接了外部 MCP server 之后这个缺口更明显：配了没连上，界面上毫无提示。 */
+.src-count {
+  display: inline-block; min-width: 17px; text-align: center;
+  font-size: 11px; padding: 0 5px; border-radius: 999px;
+  background: #1d3a2c; color: var(--good); border: 1px solid #2b5a45;
+}
+.src-count.off { background: var(--panel-2); color: var(--muted); border-color: var(--border); }
+
+.src {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 10px; background: var(--panel-2);
+}
+.src.bad { border-color: #5c2f2c; background: #1a1214; }
+.src-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.src-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.src-dot.ok { background: var(--good); }
+.src-dot.bad { background: var(--bad); }
+.src-why { font-size: 12.5px; color: #f0b39c; word-break: break-all; }
+.src-skips { margin-top: 8px; }
+.src-skip {
+  font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+  padding: 3px 0 3px 12px; border-left: 2px solid var(--border);
+}

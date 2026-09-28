@@ -80,7 +80,8 @@ class Provider(ABC):
         """本 provider 提供的工具（**必须全部是只读的**）。"""
 
     def describe(self) -> dict[str, Any]:
-        return {"name": self.name}
+        """给人看的补充信息。``skipped`` 用于说明"这个源里有工具我没导入"。"""
+        return {"name": self.name, "skipped": []}
 
 
 class ProviderRegistry:
@@ -204,10 +205,16 @@ class ProviderRegistry:
         """自检/界面用：装了哪些、跳过了哪些、为什么。"""
         out: list[dict[str, Any]] = []
         for name, p in self.available.items():
-            out.append({"name": name, "available": True,
-                        "tools": sum(1 for pr, _t in self._tools.values()
-                                     if pr.name == name),
-                        "reason": ""})
+            info = p.describe()
+            out.append({
+                "name": name, "available": True,
+                "tools": sum(1 for pr, _t in self._tools.values() if pr.name == name),
+                "reason": "",
+                # 例如 MCP：连上了、有 8 个工具，但只导入了白名单里的 1 个。
+                # 不说清楚的话，人会以为"接上了怎么啥也没有"。
+                "skipped": info.get("skipped", []),
+            })
         for name, why in self.unavailable.items():
-            out.append({"name": name, "available": False, "tools": 0, "reason": why})
+            out.append({"name": name, "available": False, "tools": 0,
+                        "reason": why, "skipped": []})
         return out

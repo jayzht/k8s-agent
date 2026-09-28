@@ -27,6 +27,9 @@
     </label>
     <a class="ghost" href="/wall" target="_blank" title="打开集群大屏（适合挂在墙上）">大屏 ↗</a>
     <button class="ghost" id="btn-refresh" title="重新拉取集群状态">刷新</button>
+    <button class="ghost" id="btn-sources" title="查看接入了哪些数据源与工具">
+      数据源 <span class="src-count" id="src-count">–</span>
+    </button>
     <button class="ghost" id="btn-audit" title="查看审计记录">审计</button>
     <div class="demo-wrap" id="demo-wrap" hidden>
       <button class="ghost danger" id="btn-demo">制造故障 ▾</button>
@@ -111,7 +114,7 @@
 <div class="drawer-mask" id="drawer-mask" hidden></div>
 <aside class="drawer" id="drawer" hidden>
   <div class="drawer-head">
-    <h2>审计记录</h2>
+    <h2 id="drawer-title">审计记录</h2>
     <button class="ghost" id="drawer-close">关闭</button>
   </div>
   <div class="drawer-body" id="drawer-body"></div>
