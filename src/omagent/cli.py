@@ -438,15 +438,58 @@ def _build_providers(k8s, args):
     from .observability import LokiProvider, PrometheusProvider
     from .providers import ProviderRegistry
 
-    if getattr(args, "no_observability", False):
-        return ProviderRegistry()
-    ns = getattr(args, "obs_namespace", "monitoring") or "monitoring"
-    return ProviderRegistry([
-        PrometheusProvider(k8s, namespace=ns,
-                           url=getattr(args, "prometheus_url", "") or ""),
-        LokiProvider(k8s, namespace=ns,
-                     url=getattr(args, "loki_url", "") or ""),
-    ])
+    providers: list = []
+    if not getattr(args, "no_observability", False):
+        ns = getattr(args, "obs_namespace", "monitoring") or "monitoring"
+        providers += [
+            PrometheusProvider(k8s, namespace=ns,
+                               url=getattr(args, "prometheus_url", "") or ""),
+            LokiProvider(k8s, namespace=ns,
+                         url=getattr(args, "loki_url", "") or ""),
+        ]
+    providers += _build_mcp_providers(args)
+    return ProviderRegistry(providers)
+
+
+def _build_mcp_providers(args) -> list:
+    """把 --mcp-server / --mcp-allow-read 解析成 McpClientProvider。
+
+    格式：
+        --mcp-server "github=npx -y @modelcontextprotocol/server-github"
+        --mcp-allow-read github:list_issues --mcp-allow-read github:get_file
+
+    **不写 --mcp-allow-read 的话，那个 server 的工具一个都不会导入**
+    （默认拒绝）。MCP 协议里远程工具能自报 readOnlyHint，但那只是对端的一句话，
+    不能当作凭据——所以必须由人来点名。
+    """
+    import shlex
+    from .mcp_client import McpClientProvider
+
+    servers = getattr(args, "mcp_server", None) or []
+    allows = getattr(args, "mcp_allow_read", None) or []
+
+    allow_map: dict[str, list[str]] = {}
+    for spec in allows:
+        if ":" not in spec:
+            raise SystemExit(f"✗ --mcp-allow-read 要写成 服务名:工具名，收到 {spec!r}")
+        srv, tool = spec.split(":", 1)
+        allow_map.setdefault(srv.strip(), []).append(tool.strip())
+
+    out = []
+    for spec in servers:
+        if "=" not in spec:
+            raise SystemExit(f"✗ --mcp-server 要写成 名字=命令，收到 {spec!r}")
+        name, cmd = spec.split("=", 1)
+        name = name.strip()
+        try:
+            argv = shlex.split(cmd)
+        except ValueError as exc:
+            raise SystemExit(f"✗ --mcp-server {name} 的命令解析失败：{exc}") from exc
+        if not argv:
+            raise SystemExit(f"✗ --mcp-server {name} 没给命令")
+        out.append(McpClientProvider(name, argv,
+                                     allow_readonly=tuple(allow_map.get(name, ()))))
+    return out
 
 
 def _add_provider_args(parser) -> None:
@@ -458,6 +501,10 @@ def _add_provider_args(parser) -> None:
                         help="直连 Loki 的地址；不填则经 API Server service proxy")
     parser.add_argument("--no-observability", action="store_true",
                         help="不装配 Prometheus / Loki，只用内置 K8s 工具")
+    parser.add_argument("--mcp-server", action="append", metavar="名字=命令",
+                        help='接一个外部 MCP server，可重复。例：--mcp-server "fs=npx -y @modelcontextprotocol/server-filesystem /data"')
+    parser.add_argument("--mcp-allow-read", action="append", metavar="服务名:工具名",
+                        help="把某个外部工具加入只读白名单（**不写就不导入**），可重复")
 
 
 def cmd_mcp(args: argparse.Namespace) -> int:
