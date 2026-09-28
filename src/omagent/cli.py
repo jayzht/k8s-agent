@@ -435,10 +435,15 @@ def _build_providers(k8s, args):
     连不上不算错误：注册表会跳过它，内置 K8s 工具照常工作。
     外部依赖缺失应该是功能降级，不是启动失败。
     """
+    from .changehistory import ChangeHistoryProvider
     from .observability import LokiProvider, PrometheusProvider
     from .providers import ProviderRegistry
 
     providers: list = []
+    # 变更历史纯读 K8s，不需要任何外部系统，所以**默认总是开**。
+    # 它直接对着评测里最稳定的三个失败（probe/crash/cordon）：
+    # 那三个的共同根因是"模型不会把症状和最近一次变更联系起来"。
+    providers.append(ChangeHistoryProvider(k8s, namespace=getattr(args, "namespace", "demo")))
     if not getattr(args, "no_observability", False):
         ns = getattr(args, "obs_namespace", "monitoring") or "monitoring"
         providers += [
