@@ -235,3 +235,64 @@ class McpClientProvider(Provider):
             self._stop()
         except Exception:  # noqa: BLE001
             pass
+
+
+# ---------------------------------------------------------------------------
+# 持久化：用户从页面上加的外部工具要活过重启
+# ---------------------------------------------------------------------------
+
+
+class McpServerStore:
+    """把 ``[{name, command, allow_readonly}]`` 存成一个 JSON 文件。
+
+    只存**用户从页面/命令行加进来的**那些。存的是用户敲的原始命令行字符串
+    （不是 shlex 切完的列表），这样界面上还能原样显示、原样改。
+    """
+
+    def __init__(self, path):
+        from pathlib import Path
+
+        self.path = Path(path)
+
+    def load(self) -> list[dict[str, Any]]:
+        if not self.path.exists():
+            return []
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            # 配置坏了不能让服务起不来——当作"一个都没配"，界面上能看到空的
+            return []
+        entries = data.get("servers") if isinstance(data, dict) else data
+        return [e for e in (entries or []) if isinstance(e, dict) and e.get("name")]
+
+    def save(self, entries: list[dict[str, Any]]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(
+            json.dumps({"version": 1, "servers": entries}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def upsert(self, entry: dict[str, Any]) -> list[dict[str, Any]]:
+        entries = [e for e in self.load() if e.get("name") != entry.get("name")]
+        entries.append(entry)
+        self.save(entries)
+        return entries
+
+    def remove(self, name: str) -> list[dict[str, Any]]:
+        entries = [e for e in self.load() if e.get("name") != name]
+        self.save(entries)
+        return entries
+
+
+def provider_from_entry(entry: dict[str, Any]) -> McpClientProvider:
+    """把一条配置变成 provider。命令解析失败会抛 ValueError（调用方转成人话）。"""
+    import shlex
+
+    argv = shlex.split(str(entry.get("command") or ""))
+    if not argv:
+        raise ValueError("没给命令")
+    return McpClientProvider(
+        str(entry["name"]),
+        argv,
+        allow_readonly=tuple(entry.get("allow_readonly") or ()),
+    )

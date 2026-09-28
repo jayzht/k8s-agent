@@ -46,6 +46,7 @@ from .auth import (
 from .config import ROOT, llm_status
 from .k8s import K8sClient, K8sUnavailable
 from .llm import LLMClient
+from .mcp_client import McpServerStore, provider_from_entry
 from .session import ChatSession
 from .tools import FORBIDDEN
 
@@ -112,6 +113,7 @@ class App:
         users: UserStore | None = None,
         secret: bytes = b"",
         session_dir: Path | None = None,
+        mcp_store=None,
     ):
         self.agent = agent
         self.audit = audit
@@ -131,6 +133,93 @@ class App:
         # 集群状态这类数据 4 秒内不会变到需要重算，但重算一次要打 30 次 API
         self._console_cache = _TTLCache(4.0)
         self._wall_cache = _TTLCache(4.0)
+        # 用户从页面上加的外部 MCP server。存在磁盘上，活过重启。
+        self.mcp_store = mcp_store or McpServerStore(ROOT / "var" / "mcp_servers.json")
+
+    # ---------------------------------------------------------- 外部 MCP 管理
+
+    def mcp_servers_view(self) -> list[dict[str, Any]]:
+        """页面上要看的：配了哪些、连上没有、导入了几个工具、跳过了哪些。"""
+        live = {p["name"]: p for p in self.agent.providers.status()}
+        out = []
+        for e in self.mcp_store.load():
+            info = live.get(e["name"], {})
+            out.append({
+                "name": e["name"],
+                "command": e.get("command", ""),
+                "allowed": list(e.get("allow_readonly") or ()),
+                "connected": bool(info.get("available")),
+                "tools": info.get("tools", 0),
+                "reason": info.get("reason", ""),
+                "skipped": info.get("skipped", []),
+            })
+        return out
+
+    def add_mcp_server(self, name: str, command: str,
+                       allow_readonly: list[str]) -> tuple[bool, str]:
+        """加一个外部 MCP server：先连上探测，再注册，最后落盘。
+
+        ⚠️ 这一步会**在这台机器上启动用户填的命令**。所以：
+        只允许 operator（viewer 连不上这个接口），并且每一步都进审计。
+        """
+        name = (name or "").strip()
+        command = (command or "").strip()
+        if not name or not command:
+            return False, "名字和命令都要填"
+        try:
+            provider = provider_from_entry(
+                {"name": name, "command": command, "allow_readonly": allow_readonly})
+        except ValueError as exc:
+            return False, f"命令解析失败：{exc}"
+
+        try:
+            self.agent.providers.add(provider)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"
+        # 连不上的也照样存下来——下次可能就连上了，界面会显示原因
+        self.mcp_store.upsert({"name": name, "command": command,
+                               "allow_readonly": list(allow_readonly or ())})
+        self.audit.append("mcp_server_added", {
+            "operator": self.operator, "name": name, "command": command,
+            "allow_readonly": list(allow_readonly or ()),
+        })
+        self._console_cache.invalidate() if hasattr(self._console_cache, "invalidate") else None
+        return True, "已接入"
+
+    def remove_mcp_server(self, name: str) -> bool:
+        ok = self.agent.providers.remove(name)
+        self.mcp_store.remove(name)
+        self.audit.append("mcp_server_removed", {"operator": self.operator, "name": name})
+        return ok
+
+    @staticmethod
+    def discover_mcp_tools(command: str) -> tuple[bool, Any]:
+        """临时连一下，把对端有哪些工具列出来——**不注册、不落盘**。
+
+        这是"直接添加"的关键一步：先看见有什么，再决定放开哪些。
+        不先探测的话，用户根本不知道该往白名单里写什么。
+        """
+        command = (command or "").strip()
+        if not command:
+            return False, "命令不能为空"
+        try:
+            provider = provider_from_entry(
+                {"name": "probe", "command": command, "allow_readonly": ()})
+        except ValueError as exc:
+            return False, f"命令解析失败：{exc}"
+        try:
+            ok, why = provider.available()
+            if not ok:
+                return False, why
+            # available() 之后 _remote_tools 就是探测结果
+            return True, [
+                {"name": t.get("name", ""),
+                 "description": (t.get("description") or "")[:200],
+                 "hints_readonly": bool((t.get("annotations") or {}).get("readOnlyHint"))}
+                for t in provider._remote_tools
+            ]
+        finally:
+            provider.close()
 
     # ------------------------------------------------------------------ 鉴权
 
@@ -719,6 +808,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/status":
                 return self._json(self.app.status())
+            if path == "/api/mcp/servers":
+                return self._json({"servers": self.app.mcp_servers_view()})
             if path == "/api/console":
                 return self._json(self.app.console(q.get("namespace", self.app.default_namespace)))
             if path == "/api/wall":
@@ -800,6 +891,27 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.app.save_session(sess)
                 return self._json(snap)
+
+            # ── 外部 MCP 工具管理 ──
+            # 这三个都是 **operator 才能碰**：添加 = 在这台机器上启动任意命令，
+            # 权限级别和"批准集群变更"不是一回事，不能给 viewer。
+            if path in ("/api/mcp/discover", "/api/mcp/servers", "/api/mcp/servers/delete"):
+                if not self._require_operator():
+                    return
+            if path == "/api/mcp/discover":
+                ok, payload = self.app.discover_mcp_tools(body.get("command", ""))
+                return self._json({"ok": ok, "tools": payload} if ok
+                                  else {"ok": False, "error": payload})
+            if path == "/api/mcp/servers":
+                ok, msg = self.app.add_mcp_server(
+                    body.get("name", ""), body.get("command", ""),
+                    list(body.get("allow_readonly") or []))
+                return self._json({"ok": ok, "message": msg,
+                                   "servers": self.app.mcp_servers_view()},
+                                 200 if ok else 400)
+            if path == "/api/mcp/servers/delete":
+                self.app.remove_mcp_server(body.get("name", ""))
+                return self._json({"ok": True, "servers": self.app.mcp_servers_view()})
 
             if path == "/api/session/delete":
                 if self._require_operator() is None:
@@ -909,6 +1021,7 @@ def serve(
     allow_anonymous: bool = False,
     bootstrap: bool = True,
     providers_factory: Any = None,
+    mcp_store=None,
 ) -> None:
     from .agent import WRITE_NAMESPACES
 
@@ -922,6 +1035,19 @@ def serve(
         providers=providers_factory(k8s) if providers_factory else None,
     )
     llm = LLMClient(model=model)
+
+    # --- 恢复用户在页面上加的外部 MCP server ---
+    #
+    # 不恢复的话，重启一次页面加的就不见了——而"加了就不管了"正是页面上加东西
+    # 该有的语义。连不上的也照样注册（会进 unavailable 并在界面显示原因），
+    # 因为"上次能用这次连不上"本身就是人需要看到的信息。
+    _store = mcp_store or McpServerStore(ROOT / "var" / "mcp_servers.json")
+    for entry in _store.load():
+        try:
+            agent.providers.add(provider_from_entry(entry))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ⚠️ 外部工具 {entry.get('name')!r} 加载失败："
+                  f"{type(exc).__name__}: {str(exc)[:100]}")
 
     # --- 鉴权 ---
     #
@@ -940,7 +1066,8 @@ def serve(
     sess_dir = Path(session_dir) if session_dir else (ROOT / "var" / "sessions")
 
     app = App(agent, audit, llm, operator=operator, default_namespace=namespace,
-              demo_mode=demo, users=users, secret=secret, session_dir=sess_dir)
+              demo_mode=demo, users=users, secret=secret, session_dir=sess_dir,
+              mcp_store=_store)
     handler = type("BoundHandler", (Handler,), {"app": app})
 
     ok, info = agent.cluster_status()

@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -87,49 +88,93 @@ class Provider(ABC):
 class ProviderRegistry:
     """把若干 provider 装配成一张只读工具表。
 
-    装配是**一次性**的：构造时问一遍可用性，之后不再变。这样"这次启动到底
-    暴露了哪些工具"是个确定的事实，而不是每次调用都可能变的运行时状态
-    ——审计和自检都需要它是个事实。
+    原来装配是**一次性**的（启动时问一遍可用性，之后不变），好处是"这次启动
+    到底暴露了哪些工具"是个确定的事实。但那样就没法在页面直接加工具，
+    只能改命令行再重启。
+
+    现在支持运行时增删，代价是要用锁保护——因为 HTTP 线程会在会话跑着的时候
+    改它。**加锁只解决数据竞争，不解决语义**：正在跑的会话可能刚好用到一个
+    被移除的工具。那种情况会明确报"工具未登记"，不会静默用错工具。
     """
 
     def __init__(self, providers: list[Provider] | None = None):
         self.available: dict[str, Provider] = {}
         self.unavailable: dict[str, str] = {}
         self._tools: dict[str, tuple[Provider, ProviderTool]] = {}
+        self._lock = threading.RLock()
 
         for p in providers or []:
+            self.add(p)
+
+    # ------------------------------------------------------------ 运行时增删
+
+    def add(self, provider: Provider) -> tuple[bool, str]:
+        """装配一个 provider。返回 (是否可用, 原因)。
+
+        不可用时**不抛异常**——外部依赖连不上是常态，注册表只把它记进
+        ``unavailable`` 并说明原因，界面会显示出来。
+        但**契约违反要抛**：声明写工具却没有 dry_run，是代码错误，不能静默放过。
+        """
+        with self._lock:
+            if provider.name in self.available:
+                self.remove(provider.name)
             try:
-                ok, why = p.available()
+                ok, why = provider.available()
             except Exception as exc:  # noqa: BLE001
                 ok, why = False, f"{type(exc).__name__}: {exc}"
             if not ok:
-                self.unavailable[p.name] = why
-                continue
-            for t in p.tools():
-                # 声明与实现必须一致，两边不一致都直接拒绝装配（fail closed）。
+                self.unavailable[provider.name] = why
+                return False, why
+
+            # 先把工具清单和 schema 校验跑完，**再**往表里放——
+            # 中途抛异常的话，不能留下半张表。
+            staged: list[tuple[str, ProviderTool]] = []
+            for t in provider.tools():
                 if t.spec.mutating and not t.has_write_path:
                     raise UnsafeProvider(
-                        f"provider {p.name!r} 把 {t.spec.name!r} 声明成写工具，"
+                        f"provider {provider.name!r} 把 {t.spec.name!r} 声明成写工具，"
                         "却没提供 dry_run / apply。"
                         "整个项目的安全承诺是「服务端干跑没过，人工批准也不执行」——"
                         "提供不了无副作用预检的写工具，不能纳入这条承诺，因此不允许注册。"
                     )
                 if not t.spec.mutating and t.has_write_path:
                     raise UnsafeProvider(
-                        f"provider {p.name!r} 把 {t.spec.name!r} 声明成只读，"
+                        f"provider {provider.name!r} 把 {t.spec.name!r} 声明成只读，"
                         "却带了 dry_run / apply。声明和实现自相矛盾，不能猜哪个是真的。"
                     )
                 if not t.spec.mutating and t.call is None:
                     raise UnsafeProvider(
-                        f"provider {p.name!r} 的只读工具 {t.spec.name!r} 没有 call 执行体。"
+                        f"provider {provider.name!r} 的只读工具 {t.spec.name!r} 没有 call 执行体。"
                     )
                 if t.spec.name in self._tools:
                     owner = self._tools[t.spec.name][0].name
                     raise ValueError(
                         f"工具名冲突：{t.spec.name!r} 已由 provider {owner!r} 提供"
                     )
-                self._tools[t.spec.name] = (p, t)
-            self.available[p.name] = p
+                staged.append((t.spec.name, t))
+
+            for name, t in staged:
+                self._tools[name] = (provider, t)
+            self.available[provider.name] = provider
+            self.unavailable.pop(provider.name, None)
+            return True, why
+
+    def remove(self, name: str) -> bool:
+        """摘掉一个 provider 连同它的工具。"""
+        with self._lock:
+            p = self.available.pop(name, None)
+            self.unavailable.pop(name, None)
+            if p is None:
+                return False
+            for tool in [t for t, (pr, _x) in self._tools.items() if pr.name == name]:
+                del self._tools[tool]
+            closer = getattr(p, "close", None)
+            if callable(closer):
+                try:
+                    closer()          # MCP provider 要收掉子进程
+                except Exception:  # noqa: BLE001
+                    pass
+            return True
 
     # ------------------------------------------------------------------ 查询
 

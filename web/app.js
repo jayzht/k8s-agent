@@ -822,12 +822,106 @@ async function openSources() {
         <div class="src-why muted">只读 ${read} 个（自动执行）· 写 ${write} 个（必须人工批准）</div>
       </div>
       ${rows || '<p class="muted">没有接入任何外部数据源。</p>'}
+      <div id="mcp-servers"></div>
       <p class="note muted small">外部数据源一律只读；写操作只能来自内置的
-        ${write} 个工具，且都要人工批准。外部 MCP 工具默认不导入，需要在启动时
-        用 --mcp-allow-read 点名。</p>`;
+        ${write} 个工具，且都要人工批准。外部 MCP 工具默认不导入，
+        必须在下面点名才会进模型工具表。</p>
+
+      <h3 class="src-sec">接入外部 MCP 工具</h3>
+      <p class="muted small">填一个 MCP server 的启动命令。点「探测工具」会先连上
+        看它有什么——<strong>探测不会注册任何东西</strong>，你要在结果里勾选
+        允许哪些（默认全不勾）。</p>
+      <div class="mcp-form">
+        <label>名字<input id="mcp-name" placeholder="fs" autocomplete="off"></label>
+        <label>启动命令<input id="mcp-cmd" placeholder="npx -y @modelcontextprotocol/server-filesystem /data" autocomplete="off"></label>
+        <div class="mcp-actions">
+          <button class="ghost" id="mcp-probe">探测工具</button>
+          <button class="ghost" id="mcp-add" disabled>接入</button>
+        </div>
+      </div>
+      <div id="mcp-result"></div>
+      <p class="note err small">⚠️ 接入 = <strong>在这台机器上启动你填的命令</strong>。
+        只加你信得过的 server；只有运维角色能操作，每一步都进审计。</p>`;
+
+    const mcpList = await api('GET', '/api/mcp/servers');
+    renderMcpServers(mcpList.servers || []);
+    wireMcpForm();
   } catch (e) {
     $('drawer-body').innerHTML = `<p class="note err">${esc(e.message)}</p>`;
   }
+}
+
+function renderMcpServers(list) {
+  const box = document.getElementById('mcp-servers');
+  if (!box) return;
+  if (!list.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<h3 class="src-sec">已接入的外部工具</h3>` + list.map((e) => `
+    <div class="src ${e.connected ? '' : 'bad'}">
+      <div class="src-head">
+        <span class="src-dot ${e.connected ? 'ok' : 'bad'}"></span>
+        <strong>${esc(e.name)}</strong>
+        <span class="muted small">${e.connected ? e.tools + ' 个工具' : '未连上'}</span>
+        <button class="ghost small" data-del="${esc(e.name)}">移除</button>
+      </div>
+      <div class="src-cmd">${esc(e.command)}</div>
+      ${e.connected ? '' : `<div class="src-why">${esc(e.reason || '')}</div>`}
+      ${(e.skipped || []).map(([n, why]) =>
+        `<div class="src-skip">${esc(n)} — ${esc(why)}</div>`).join('')}
+    </div>`).join('');
+  box.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+    const r = await api('POST', '/api/mcp/servers/delete', { name: b.dataset.del });
+    renderMcpServers(r.servers || []);
+    loadStatus();
+  }));
+}
+
+let mcpProbed = [];
+
+function wireMcpForm() {
+  const probe = document.getElementById('mcp-probe');
+  const add = document.getElementById('mcp-add');
+  if (!probe) return;
+  mcpProbed = [];
+  add.disabled = true;
+  probe.addEventListener('click', async () => {
+    const cmd = document.getElementById('mcp-cmd').value.trim();
+    const out = document.getElementById('mcp-result');
+    if (!cmd) { out.innerHTML = '<p class="note err">先填命令</p>'; return; }
+    out.innerHTML = '<p class="muted">连接中…</p>';
+    add.disabled = true;
+    try {
+      const r = await api('POST', '/api/mcp/discover', { command: cmd });
+      if (!r.ok) { out.innerHTML = `<p class="note err">探测失败：${esc(r.error || '')}</p>`; return; }
+      mcpProbed = r.tools || [];
+      out.innerHTML = `<p class="muted small">这个 server 有 ${mcpProbed.length} 个工具，
+        勾选允许自动执行的（<strong>只勾确实只读的</strong>）：</p>` +
+        mcpProbed.map((t, i) => `
+          <label class="mcp-tool">
+            <input type="checkbox" data-tool="${i}">
+            <span><code>${esc(t.name)}</code>
+              ${t.hints_readonly ? '<span class="muted small">（对端自称只读）</span>' : ''}
+              <br><span class="muted small">${esc(t.description || '')}</span></span>
+          </label>`).join('');
+      add.disabled = false;
+    } catch (e) {
+      out.innerHTML = `<p class="note err">${esc(e.message)}</p>`;
+    }
+  });
+
+  add.addEventListener('click', async () => {
+    const name = document.getElementById('mcp-name').value.trim();
+    const cmd = document.getElementById('mcp-cmd').value.trim();
+    const out = document.getElementById('mcp-result');
+    if (!name) { out.innerHTML = '<p class="note err">先填名字</p>'; return; }
+    const allow = [...document.querySelectorAll('#mcp-result [data-tool]')]
+      .filter((c) => c.checked)
+      .map((c) => mcpProbed[Number(c.dataset.tool)].name);
+    const r = await api('POST', '/api/mcp/servers', { name, command: cmd, allow_readonly: allow });
+    if (!r.ok) { out.innerHTML = `<p class="note err">${esc(r.message || '接入失败')}</p>`; return; }
+    out.innerHTML = `<p class="note">已接入 ${esc(name)}，放开了 ${allow.length} 个工具。</p>`;
+    renderMcpServers(r.servers || []);
+    loadStatus();
+  });
 }
 
 async function openAudit() {

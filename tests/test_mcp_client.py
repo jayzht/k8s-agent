@@ -119,3 +119,78 @@ def test_cli_格式写错时明确报错():
         _build_mcp_providers(Namespace(mcp_server=[], mcp_allow_read=["写错了"]))
     with pytest.raises(SystemExit, match="名字=命令"):
         _build_mcp_providers(Namespace(mcp_server=["没有等号"], mcp_allow_read=[]))
+
+
+# ---------------------------------------------------------------------------
+# 运行时添加 / 移除（页面上的"直接加"）
+# ---------------------------------------------------------------------------
+
+
+def test_运行时添加后工具立刻进注册表():
+    from omagent.providers import ProviderRegistry
+    from omagent.mcp_client import provider_from_entry
+    import sys
+    from pathlib import Path
+
+    cmd = f"{sys.executable} {Path(__file__).parent / 'mcp_fixture_server.py'}"
+    reg = ProviderRegistry()
+    assert reg.names() == ()
+    ok, _why = reg.add(provider_from_entry(
+        {"name": "fake", "command": cmd, "allow_readonly": ["read_file"]}))
+    assert ok
+    assert reg.names() == ("fake__read_file",)
+
+
+def test_移除后工具消失():
+    from omagent.providers import ProviderRegistry
+    from omagent.mcp_client import provider_from_entry
+    import sys
+    from pathlib import Path
+
+    cmd = f"{sys.executable} {Path(__file__).parent / 'mcp_fixture_server.py'}"
+    reg = ProviderRegistry()
+    reg.add(provider_from_entry({"name": "fake", "command": cmd,
+                                "allow_readonly": ["read_file"]}))
+    assert reg.remove("fake") is True
+    assert reg.names() == ()
+    assert "fake" not in reg.available
+    # 再删一次是幂等的
+    assert reg.remove("fake") is False
+
+
+def test_重新添加同名会替换而不是冲突():
+    """改命令再保存，应该覆盖旧连接——否则旧子进程会一直挂着。"""
+    from omagent.providers import ProviderRegistry
+    from omagent.mcp_client import provider_from_entry
+    import sys
+    from pathlib import Path
+
+    cmd = f"{sys.executable} {Path(__file__).parent / 'mcp_fixture_server.py'}"
+    reg = ProviderRegistry()
+    reg.add(provider_from_entry({"name": "fake", "command": cmd,
+                                "allow_readonly": ["read_file"]}))
+    ok, _ = reg.add(provider_from_entry({"name": "fake", "command": cmd,
+                                         "allow_readonly": []}))
+    assert ok
+    # 白名单清了 → 工具就不该再导出
+    assert reg.names() == ()
+
+
+def test_store_落盘并读回(tmp_path):
+    from omagent.mcp_client import McpServerStore
+
+    st = McpServerStore(tmp_path / "mcp.json")
+    assert st.load() == []
+    st.upsert({"name": "fs", "command": "npx -y x", "allow_readonly": ["read_file"]})
+    assert [e["name"] for e in McpServerStore(tmp_path / "mcp.json").load()] == ["fs"]
+    st.remove("fs")
+    assert st.load() == []
+
+
+def test_配置文件坏了不影响启动(tmp_path):
+    """配置写坏了必须降级成"一个都没配"，不能让服务起不来。"""
+    from omagent.mcp_client import McpServerStore
+
+    p = tmp_path / "mcp.json"
+    p.write_text("{ 这不是 JSON", encoding="utf-8")
+    assert McpServerStore(p).load() == []
