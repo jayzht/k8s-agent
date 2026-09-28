@@ -40,10 +40,25 @@ class UnsafeProvider(RuntimeError):
 
 @dataclass(frozen=True)
 class ProviderTool:
-    """provider 提供的一个只读工具：一份 schema + 一个执行函数。"""
+    """provider 提供的一个工具：一份 schema + 执行体。
+
+    **只读工具**：给 ``call`` 就行。
+    **写工具**：必须同时给 ``dry_run`` 和 ``apply``——这是能注册为写工具的前提。
+
+    为什么写工具必须有 ``dry_run``：整个项目的安全承诺是
+    「**服务端干跑没过，人工批准也不执行**」。一个提供不了无副作用预检的写工具，
+    就没法纳入这条承诺，因此不允许注册。这不是"暂时不支持"，是**刻意的门槛**。
+    """
 
     spec: ToolSpec
-    call: Callable[[dict[str, Any]], str]
+    call: Callable[[dict[str, Any]], str] | None = None
+    # 写工具必填：dry_run 返回 (是否通过, 说明)；apply 真正落地并返回人话结果
+    dry_run: Callable[[dict[str, Any]], tuple[bool, str]] | None = None
+    apply: Callable[[dict[str, Any]], str] | None = None
+
+    @property
+    def has_write_path(self) -> bool:
+        return self.dry_run is not None and self.apply is not None
 
 
 class Provider(ABC):
@@ -90,12 +105,22 @@ class ProviderRegistry:
                 self.unavailable[p.name] = why
                 continue
             for t in p.tools():
-                # fail closed：写工具一律拒绝装配，不做"打个日志放过"这种事
-                if t.spec.mutating:
+                # 声明与实现必须一致，两边不一致都直接拒绝装配（fail closed）。
+                if t.spec.mutating and not t.has_write_path:
                     raise UnsafeProvider(
-                        f"provider {p.name!r} 试图提供写工具 {t.spec.name!r}。"
-                        "provider 只能是只读数据源；写操作必须走 K8sClient.apply_mutation，"
-                        "否则会绕过审批、dry-run 和审计。"
+                        f"provider {p.name!r} 把 {t.spec.name!r} 声明成写工具，"
+                        "却没提供 dry_run / apply。"
+                        "整个项目的安全承诺是「服务端干跑没过，人工批准也不执行」——"
+                        "提供不了无副作用预检的写工具，不能纳入这条承诺，因此不允许注册。"
+                    )
+                if not t.spec.mutating and t.has_write_path:
+                    raise UnsafeProvider(
+                        f"provider {p.name!r} 把 {t.spec.name!r} 声明成只读，"
+                        "却带了 dry_run / apply。声明和实现自相矛盾，不能猜哪个是真的。"
+                    )
+                if not t.spec.mutating and t.call is None:
+                    raise UnsafeProvider(
+                        f"provider {p.name!r} 的只读工具 {t.spec.name!r} 没有 call 执行体。"
                     )
                 if t.spec.name in self._tools:
                     owner = self._tools[t.spec.name][0].name
@@ -137,20 +162,40 @@ class ProviderRegistry:
         except Exception as exc:  # noqa: BLE001
             raise ProviderError(f"{p.name}: {type(exc).__name__}: {exc}") from exc
 
+    def is_mutating(self, name: str) -> bool:
+        """未登记的仍然 fail closed（返回 True）。"""
+        spec = self.spec(name)
+        return True if spec is None else spec.mutating
+
+    def dry_run(self, name: str, params: dict[str, Any]) -> tuple[bool, str]:
+        """走 provider 写工具的无副作用预检。"""
+        entry = self._tools.get(name)
+        if entry is None or entry[1].dry_run is None:
+            raise ProviderError(f"{name!r} 不是已注册的 provider 写工具")
+        return entry[1].dry_run(params)
+
+    def apply(self, name: str, params: dict[str, Any]) -> str:
+        entry = self._tools.get(name)
+        if entry is None or entry[1].apply is None:
+            raise ProviderError(f"{name!r} 不是已注册的 provider 写工具")
+        return entry[1].apply(params)
+
     # ------------------------------------------------------- 给模型 / 界面用
 
     def openai_schema(self) -> list[dict[str, Any]]:
         return [
             {"type": "function",
              "function": {"name": t.spec.name,
-                          "description": f"[{p.name}] {t.spec.summary}",
+                          "description": f"[{p.name}] {t.spec.summary}"
+                          + ("（写操作：调用后不会立即执行，需要运维人员确认）"
+                             if t.spec.mutating else ""),
                           "parameters": t.spec.schema}}
             for p, t in self._tools.values()
         ]
 
     def ui_list(self) -> list[dict[str, Any]]:
         return [
-            {"name": t.spec.name, "mutating": False,
+            {"name": t.spec.name, "mutating": t.spec.mutating,
              "summary": f"[{p.name}] {t.spec.summary}", "provider": p.name}
             for p, t in self._tools.values()
         ]

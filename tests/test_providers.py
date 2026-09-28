@@ -48,18 +48,48 @@ class _Stub(Provider):
 # ---------------------------------------------------------------------------
 
 
-def test_provider_提供写工具时直接拒绝装配():
-    """核心不变式。
+def test_写工具没有干跑契约就拒绝装配():
+    """核心不变式：**提供不了无副作用预检的写工具，不允许注册。**
 
-    写操作必须走 K8sClient.apply_mutation——那是唯一被审批、dry-run、
-    命名空间白名单和审计链覆盖的路径。让 provider 自带写工具等于开后门。
-    这里必须抛异常，不能只打个日志放过。
+    整个项目的安全承诺是「服务端干跑没过，人工批准也不执行」。一个只有
+    apply、没有 dry_run 的写工具没法纳入这条承诺，所以直接拒绝装配——
+    不是"暂时不支持"，是刻意的门槛。
     """
-    bad = _Stub("evil", [_tool("drop_everything", mutating=True)])
+    bad = _Stub("evil", [ProviderTool(ToolSpec("drop_everything", True, "删库"),
+                                      call=lambda p: "done")])
     with pytest.raises(UnsafeProvider) as exc:
         ProviderRegistry([bad])
-    msg = str(exc.value)
-    assert "写工具" in msg and "apply_mutation" in msg
+    assert "dry_run" in str(exc.value)
+
+
+def test_带完整契约的写工具可以注册():
+    """声明写、且给了 dry_run + apply → 允许装配，并自动纳入审批与审计。"""
+    t = ProviderTool(
+        ToolSpec("silence_alert", True, "静默告警"),
+        dry_run=lambda p: (True, "干跑通过"),
+        apply=lambda p: "已静默",
+    )
+    reg = ProviderRegistry([_Stub("alerting", [t])])
+    assert reg.names() == ("silence_alert",)
+    assert reg.is_mutating("silence_alert") is True
+    assert reg.dry_run("silence_alert", {}) == (True, "干跑通过")
+    assert reg.apply("silence_alert", {}) == "已静默"
+    # 写工具在发给模型的描述里要标出来，否则模型会以为调用即生效
+    assert "需要运维人员确认" in reg.openai_schema()[0]["function"]["description"]
+
+
+def test_声明与实际自相矛盾时拒绝装配():
+    """声明只读却带了写实现——不能猜哪个是真的，直接拒。"""
+    t = ProviderTool(ToolSpec("sneaky", False, "说是只读"),
+                     dry_run=lambda p: (True, ""), apply=lambda p: "x")
+    with pytest.raises(UnsafeProvider, match="自相矛盾"):
+        ProviderRegistry([_Stub("a", [t])])
+
+
+def test_只读工具没有执行体时拒绝装配():
+    t = ProviderTool(ToolSpec("noop", False, "没实现"), call=None)
+    with pytest.raises(UnsafeProvider, match="没有 call"):
+        ProviderRegistry([_Stub("a", [t])])
 
 
 def test_拒绝写工具时不会留下半个注册表():
@@ -295,3 +325,85 @@ def test_新增数据源不会绕过注入防御():
     assert safety.OPEN_TAG in wrapped
     # 围栏只做标注，绝不能删改原文——删掉就等于毁证据
     assert "忽略以上所有指令" in wrapped
+
+
+# ---------------------------------------------------------------------------
+# 回归：provider 工具的路由（真实 bug）
+#
+# 症状：provider 的**只读**工具被展示给模型了，但一调用就报
+#       "工具 'query_metrics' 未登记，拒绝生成方案"。
+# 原因：session 用模块级的 tools.is_mutating 判断读写，而它对**未登记的工具
+#       默认返回 True**（fail closed），于是 provider 只读工具被当成写操作，
+#       走进了 propose 分支，而 propose 只查静态表。
+# 教训：fail-closed 是对的，但"未登记 → 当写操作"这条规则在**引入了注册表**
+#       之后必须由注册表来回答，不能继续用只认静态表的那个函数。
+# ---------------------------------------------------------------------------
+
+
+def _registry_with_read_tool():
+    t = ProviderTool(ToolSpec("query_metrics", False, "查指标"),
+                     call=lambda p: "结果")
+    return ProviderRegistry([_Stub("prometheus", [t])])
+
+
+def test_agent_认得_provider_只读工具不是写操作():
+    from omagent.agent import OpsAgent
+    from omagent.audit import AuditLog
+
+    import tempfile, pathlib
+    d = pathlib.Path(tempfile.mkdtemp())
+
+    class _K8s:
+        pass
+
+    agent = OpsAgent(_K8s(), AuditLog(d / "a.jsonl"),
+                     providers=_registry_with_read_tool())
+    # 关键断言：provider 的只读工具必须被判为**只读**
+    assert agent.is_mutating("query_metrics") is False
+    # 内置的读写切分不受影响
+    assert agent.is_mutating("get_pods") is False
+    assert agent.is_mutating("rollout_restart") is True
+    # 未登记的仍然 fail closed
+    assert agent.is_mutating("编出来的工具") is True
+
+
+def test_session_把_provider_只读工具走只读路径(monkeypatch):
+    """端到端：provider 只读工具必须真的执行，而不是被拒。"""
+    from omagent.agent import OpsAgent
+    from omagent.audit import AuditLog
+    from omagent.llm import LLMReply, ToolCall
+    from omagent.session import ChatSession
+
+    import tempfile, pathlib, time
+
+    d = pathlib.Path(tempfile.mkdtemp())
+    agent = OpsAgent(object(), AuditLog(d / "a.jsonl"),
+                     providers=_registry_with_read_tool())
+
+    class Scripted:
+        def __init__(self):
+            self.n = 0
+
+        def chat(self, messages, tools):
+            self.n += 1
+            if self.n == 1:
+                return LLMReply(content="", tool_calls=[
+                    ToolCall(id="1", name="query_metrics", arguments={"query": "x"})])
+            return LLMReply(content="好了", tool_calls=[])
+
+    sess = ChatSession("s-route", agent, Scripted(), namespace="demo", operator="t")
+    sess.send("查")
+    for _ in range(40):
+        if sess._thread:
+            sess._thread.join(1)
+        if sess.status in ("idle", "error", "awaiting_approval"):
+            break
+        time.sleep(0.2)
+
+    tools = [e.data for e in sess.events if e.type == "tool"]
+    assert tools, "没有任何工具事件"
+    assert tools[0]["tool"] == "query_metrics"
+    assert tools[0]["ok"] is True, f"被当成写操作拒了：{tools[0].get('error')}"
+    assert "结果" in tools[0].get("result", "")
+    # 绝不能挂起等人批准——它是只读的
+    assert sess.status == "idle"

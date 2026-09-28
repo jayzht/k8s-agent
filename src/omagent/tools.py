@@ -35,6 +35,13 @@ class ToolSpec:
     mutating: bool
     summary: str  # 一句话人话说明，给操作员看
     schema: dict[str, Any] = field(default_factory=dict)
+    # 这次操作是否受"写操作命名空间白名单"约束。
+    #
+    # **默认 True（fail closed）**：新增的工具默认要过白名单，除非它显式说明
+    # 自己不针对某个命名空间（比如节点级动作、或者调外部系统的工具）。
+    # 以前这里是一句 `if spec.name in ("cordon_node", "uncordon_node", "drain_node")`
+    # ——硬编码工具名做例外，加了 provider 之后根本不会跟着扩展。
+    namespace_scoped: bool = True
 
     @property
     def params(self) -> dict[str, Any]:
@@ -218,10 +225,12 @@ _WRITE: list[ToolSpec] = [
     ToolSpec(
         "cordon_node", True, "标记节点不可调度（不影响已在运行的 Pod）",
         _wobj({"node": {"type": "string"}}, ["node"]),
+        namespace_scoped=False,   # 节点级动作，没有命名空间这回事
     ),
     ToolSpec(
         "uncordon_node", True, "恢复节点可调度（cordon 的回滚动作）",
         _wobj({"node": {"type": "string"}}, ["node"]),
+        namespace_scoped=False,
     ),
     ToolSpec(
         "drain_node", True, "驱逐节点上的 Pod（会逐个迁移，PDB 不满足时会被拒绝）",
@@ -231,6 +240,7 @@ _WRITE: list[ToolSpec] = [
              "delete_emptydir_data": {"type": "boolean", "description": "允许驱逐使用 emptyDir 的 Pod，其数据会丢失"}},
             ["node"],
         ),
+        namespace_scoped=False,
     ),
     ToolSpec(
         "rollback_configmap", True, "把 ConfigMap 回滚到指定内容",

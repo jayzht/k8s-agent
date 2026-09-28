@@ -37,7 +37,7 @@ from .agent import GateViolation, OpsAgent
 from .llm import LLMClient, LLMError, ToolCall
 from .models import Decision, Proposal
 from . import safety
-from .tools import FORBIDDEN, is_mutating
+from .tools import FORBIDDEN
 
 # 一次排查最多让模型思考多少轮。防止"模型一直查下去"既不收敛也不停。
 MAX_STEPS = 12
@@ -719,7 +719,10 @@ class ChatSession:
             self._append_tool_result(call.id, call.name, msg, ok=False, trusted=True)
             return True
 
-        if is_mutating(call.name):
+        # 必须问 agent，不能问模块级的 tools.is_mutating——后者只认静态表，
+        # 会把 provider 的**只读**工具误判成写操作（真实 bug：
+        # query_metrics 一调用就报"未登记，拒绝生成方案"）。
+        if self.agent.is_mutating(call.name):
             return self._propose(call)
 
         # --- 只读：自动执行 ---

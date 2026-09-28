@@ -93,6 +93,21 @@ class OpsAgent:
         out.update({s.name: s for s in self.providers.specs()})
         return out
 
+    def spec_of(self, tool: str) -> ToolSpec | None:
+        """内置工具优先，其次看已装配的 provider。"""
+        return TOOLS.get(tool) or self.providers.spec(tool)
+
+    def is_mutating(self, tool: str) -> bool:
+        """这个工具是不是写操作？
+
+        **未登记的仍返回 True（fail closed）**——但已装配的 provider 工具会按它
+        自己的声明回答。session 必须用这个方法而不是模块级的 ``tools.is_mutating``：
+        后者只认静态表，会把 provider 的**只读**工具也当成写操作，
+        结果是"工具展示给模型了，但一调用就报未登记"。
+        """
+        spec = self.spec_of(tool)
+        return True if spec is None else spec.mutating
+
     # ---------------------------------------------------------------- 只读路径
 
     def run_readonly(self, tool: str, params: dict[str, Any]) -> str:
@@ -109,11 +124,8 @@ class OpsAgent:
             raise GateViolation(f"{tool} 属于禁止动作：{FORBIDDEN[tool]}")
         # 内置 K8s 工具为主；不在内置表里的，看是不是已装配的 provider 工具。
         # 两边都没有 → 拒绝（fail closed）。
-        spec = TOOLS.get(tool)
-        from_provider = False
-        if spec is None:
-            spec = self.providers.spec(tool)
-            from_provider = spec is not None
+        spec = self.spec_of(tool)
+        from_provider = spec is not None and TOOLS.get(tool) is None
         if spec is None:
             raise GateViolation(f"工具 {tool!r} 未登记")
         if spec.mutating:
@@ -163,7 +175,7 @@ class OpsAgent:
 
         if tool in FORBIDDEN:
             raise GateViolation(f"{tool} 属于禁止动作，不会被生成方案：{FORBIDDEN[tool]}")
-        spec = TOOLS.get(tool)
+        spec = self.spec_of(tool)
         if spec is None:
             raise GateViolation(f"工具 {tool!r} 未登记，拒绝生成方案")
         if not spec.mutating:
@@ -291,7 +303,10 @@ class OpsAgent:
         # --- 执行 ---
         with self.write_lock:
             try:
-                out = self.k8s.apply_mutation(prop.tool, prop.params, dry_run=False)
+                if self.providers.spec(prop.tool) is not None:
+                    out = self.providers.apply(prop.tool, prop.params)
+                else:
+                    out = self.k8s.apply_mutation(prop.tool, prop.params, dry_run=False)
                 return result("success", output=out)
             except ActionRejected as exc:
                 return result("failed", error=str(exc))
@@ -311,7 +326,9 @@ class OpsAgent:
         东西，被限制在 schema 之内。校验失败抛出的消息是写给模型看的，
         它读到之后能自己改对参数重试。
         """
-        spec = TOOLS[tool]
+        spec = self.spec_of(tool)
+        if spec is None:
+            raise GateViolation(f"工具 {tool!r} 未登记")
         schema = spec.schema
         props: dict[str, Any] = schema.get("properties", {})
         if not isinstance(params, dict):
@@ -365,8 +382,12 @@ class OpsAgent:
         )
 
     def _assert_writable_namespace(self, spec: ToolSpec, params: dict[str, Any]) -> None:
-        """节点级动作没有命名空间，靠集群本身的 RBAC 兜底；其余必须在允许列表内。"""
-        if spec.name in ("cordon_node", "uncordon_node", "drain_node"):
+        """受约束的工具，其目标命名空间必须在允许列表内。
+
+        哪些工具受约束由 ``spec.namespace_scoped`` 决定，而不是靠工具名硬编码——
+        这样 provider 带来的新工具也能正确纳入（或正确豁免）。
+        """
+        if not spec.namespace_scoped:
             return
         ns = params.get("namespace", "")
         if ns not in self.write_namespaces:
@@ -511,6 +532,10 @@ class OpsAgent:
     def _dry_run(self, prop: Proposal) -> tuple[bool, str]:
         """服务端 dry-run（dry_run='All'）。不产生任何副作用。"""
         try:
+            # 内置 K8s 写工具走 K8sClient；provider 写工具走它自己的 dry_run。
+            # 两条路的**结果都要进卡片**，也都要在批准时重跑——门禁不因来源而不同。
+            if self.providers.spec(prop.tool) is not None:
+                return self.providers.dry_run(prop.tool, prop.params)
             out = self.k8s.apply_mutation(prop.tool, prop.params, dry_run=True)
             return True, out
         except ActionRejected as exc:
