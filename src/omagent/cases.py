@@ -127,6 +127,35 @@ def symptom_tokens(
     except Exception:  # noqa: BLE001
         pass
 
+    # 调度约束层面：**这一步是让 cordon 和 pending 能分开的关键**。
+    #
+    # 这两个故障原来的签名**完全相同**（都是 pending + replicas_short + unhealthy），
+    # 于是一条给 cordon 写的处置经验会在 pending 场景下 100% 命中，
+    # 给出完全相反的建议。它们的处置确实相反：
+    #   cordon  —— 节点被封锁，放开调度就行（uncordon_node）
+    #   pending —— nodeSelector 指向不存在的池，**没有任何工具能改它**
+    #
+    # 区分点是"匹配的节点存不存在"，可确定性计算：
+    #   有节点匹配、但它被 cordon 了  → node_cordoned
+    #   一个匹配的节点都没有          → no_matching_node
+    try:
+        wl = k8s.read_workload(namespace, kind, name)
+        want = dict(getattr(wl.spec.template.spec, "node_selector", None) or {})
+        if want:
+            matched, cordoned = False, False
+            for node in k8s.list_nodes():
+                labels = dict(node.get("labels") or {})
+                if all(labels.get(k) == v for k, v in want.items()):
+                    matched = True
+                    if node.get("unschedulable"):
+                        cordoned = True
+            if cordoned:
+                tokens.add("node_cordoned")
+            elif not matched:
+                tokens.add("no_matching_node")
+    except Exception:  # noqa: BLE001
+        pass
+
     # Service / Endpoints 层面：这类问题不会体现在 Pod 状态上
     try:
         for ep in k8s.list_endpoints(namespace):
