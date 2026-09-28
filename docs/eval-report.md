@@ -565,3 +565,64 @@ success." / "Let me re-verify that and try a couple of variants." ——
 
 `cordon` 仍然失败（它的问题不是"没看到变更"，而是没把"节点被封锁"和
 `uncordon_node` 联系起来），`pending` 也仍然失败（正解就是"没有工具"）。
+
+---
+
+# 第六轮：runbook 把 `config` 修回来了（12/15，两轮连稳）
+
+## 结果
+
+| 轮次 | 通过 | `probe` | `crash` | `cordon` | `config` | `pending` |
+|---|---|---|---|---|---|---|
+| run1~5（基线） | 10~11/15 | ✗ 0/5 | ✗ | ✗ | ✓ 5/5 | ✗ |
+| run6 加独立工具 | 10/15 | ✗ | ✗ | ✗ | ✓ | ✗ |
+| run7 内联变更 | **12/15** | **✓** | ✓ | ✗ | ✗ | ✗ |
+| **run8 + runbook** | **12/15** | **✓** | ✗ | ✗ | **✓** | ✗ |
+
+**两项改动合起来的效果：**
+
+1. **`probe` 连续两轮通过**（run7、run8），此前是 **0/6**。
+   这是七轮里最难啃的一个，现在看起来是**真的修好了**，不是波动。
+2. **`config` 被 runbook 修回来了**（run7 被我那句钝提示词推到 `rollout_undo`，
+   run8 正确选了 `rollback_configmap`）。
+3. 基线是 10~11/15，现在**连续两轮 12/15**。token 也从约 59 万降到 44 万。
+
+## ⚠️ 但 `cordon` 和 `pending` 的 runbook 写不了 —— 签名区分不开
+
+这是本轮最重要的发现，也是**没有继续加 runbook 的原因**：
+
+```
+cordon : ['pending', 'replicas_short', 'unhealthy']
+pending: ['pending', 'replicas_short', 'unhealthy']   ← 完全相同
+```
+
+**两个故障的症状签名一模一样（Jaccard = 1.0）。** 给 `cordon` 写一条
+"用 `uncordon_node`" 的 runbook，它会在 `pending` 场景下以 **100% 匹配**被检索到，
+然后给出**完全相反**的建议——`pending` 的正解恰恰是"没有工具能改 nodeSelector，
+需要手工执行"。
+
+**所以这不是 runbook 的问题，是 `symptom_tokens()` 太粗。** 它把
+"有节点被 cordon" 和 "nodeSelector 指向不存在的池" 归成了同一类
+——而这两件事的处置完全相反。
+
+**下一步（本轮没做）**：给 `symptom_tokens()` 加节点层面的区分 token，例如
+
+- `node_cordoned` —— 存在一个 `unschedulable=True` 的节点，而该工作负载
+  本来能调度上去
+- `no_matching_node` —— 集群里**没有任何**节点匹配它的 nodeSelector
+
+这两个都是可确定性计算的。加上之后 `cordon` / `pending` 才能分开，
+runbook 也才写得下去。
+
+**顺带一提，这个发现的价值超出 runbook**：学来的案例库同样分不开这两类故障，
+所以它们的历史经验也会互相污染。这是**记忆机制本身的精度问题**，
+不是这一轮新引入的。
+
+## 这一轮的教训
+
+**"网上有现成的 skills"是真的**（SKILL.md 已是开放标准，HolmesGPT 也有一套），
+但**采用格式不等于能解决问题**——我照着做了，却发现最需要它的两个场景
+**根本区分不开**。
+
+先查数据、再动格式。`symptom_tokens()` 那两行输出如果早点打出来，
+能省下这一轮。
