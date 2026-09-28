@@ -142,7 +142,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
             AuditLog(ROOT / "var" / "eval-audit.jsonl"),
             operator="eval",
             write_namespaces=WRITE_NAMESPACES,
-            cases=CaseStore(eval_cases),
+            cases=CaseStore(eval_cases, runbooks=ROOT / "runbooks.jsonl"),
         )
 
     print(f"评测 {len(scenarios)} 个剧本 × {args.repeat} 次，用真模型真集群。")

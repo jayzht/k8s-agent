@@ -195,6 +195,16 @@ def similarity(a: list[str], b: list[str]) -> float:
 OUTCOME_APPLIED = "applied"
 OUTCOME_EFFECTIVE = "effective"
 OUTCOME_INEFFECTIVE = "ineffective"
+#   authored     —— **人手工整理的 runbook**，没有在本集群验证过。
+#
+# 为什么要这一层：评测跑到第七轮，剩下的失败（`cordon` / `config` / `pending`）
+# 已经不是"事实没暴露"，而是"**知道事实但选错动作**"——模型看到了节点被封锁，
+# 却没把症状和 uncordon_node 联系起来。这类问题加工具没用，得加**知识**。
+#
+# 学来的案例只收"执行后回查确认有效"的修复，所以**从来没被修好过的故障永远是空的**。
+# runbook 补的就是这个缺口：第一天就能用，代价是可信度不如实测。
+# 两者在渲染时**必须区分开**，不能让人以为 runbook 也在这个集群验证过。
+OUTCOME_AUTHORED = "authored"
 
 
 @dataclass
@@ -227,6 +237,15 @@ class Case:
 
     def render(self, score: float, current_workload: str = "") -> str:
         """给模型看的一行。目标不同的时候要说清楚，别让它照抄参数。"""
+        if self.outcome == OUTCOME_AUTHORED:
+            return (
+                f"- 匹配度 {int(score * 100)}% ｜ **人工整理的处置经验**"
+                f"（⚠️ 未在本集群验证过，需自行判断是否适用）\n"
+                f"  症状：{describe(self.signature)}\n"
+                f"  建议处置：{self.tool or '（无工具，需人工执行）'}"
+                + (f"({json.dumps(self.params, ensure_ascii=False)})" if self.params else "")
+                + f"\n  依据：{(self.rationale or '（未记录）')[:300]}"
+            )
         same = (not current_workload) or self.workload == current_workload
         target_note = "" if same else f"（当时改的是 {self.workload}，这次是 {current_workload}，参数要相应调整）"
         age = (self.ts or "")[:19].replace("T", " ")
@@ -248,9 +267,31 @@ class CaseStore:
     这样既保持追加写的简单性，又能表达"这条经验被推翻了"。
     """
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, runbooks: str | Path | None = None):
         self.path = Path(path)
+        # 人写的 runbook（可选）。与学来的案例放一起检索，但**结果里会标明来源**。
+        self.runbooks = Path(runbooks) if runbooks else None
         self._cache: list[Case] | None = None
+        self._authored: list[Case] | None = None
+
+    def authored(self) -> list[Case]:
+        """加载人工整理的 runbook。文件不存在就是空——不报错。"""
+        if self._authored is not None:
+            return self._authored
+        out: list[Case] = []
+        if self.runbooks and self.runbooks.is_file():
+            for line in self.runbooks.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                try:
+                    c = Case.from_dict(json.loads(line))
+                except (ValueError, TypeError):
+                    continue
+                c.outcome = OUTCOME_AUTHORED
+                out.append(c)
+        self._authored = out
+        return out
 
     # ------------------------------------------------------------------ 写
 
@@ -365,8 +406,8 @@ class CaseStore:
             return []
         scored = [
             (similarity(tokens, c.signature), c)
-            for c in self.all()
-            if c.outcome == OUTCOME_EFFECTIVE
+            for c in (*self.all(), *self.authored())
+            if c.outcome in (OUTCOME_EFFECTIVE, OUTCOME_AUTHORED)
         ]
         hits = [(s, c) for s, c in scored if s >= min_score]
         hits.sort(key=lambda x: (x[0], x[1].ts), reverse=True)

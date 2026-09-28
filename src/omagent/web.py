@@ -1030,7 +1030,8 @@ def serve(
     agent = OpsAgent(
         k8s, audit, operator=operator,
         write_namespaces=write_namespaces or WRITE_NAMESPACES,
-        cases=CaseStore(ROOT / "var" / "cases.jsonl"),
+        cases=CaseStore(ROOT / "var" / "cases.jsonl",
+                        runbooks=ROOT / "runbooks.jsonl"),
         # 外部只读数据源。没传工厂就是空表——行为与只有 K8s 工具时完全一致。
         providers=providers_factory(k8s) if providers_factory else None,
     )
