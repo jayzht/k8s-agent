@@ -156,3 +156,69 @@ def test_injection_in_logs_is_detected_end_to_end():
     assert safety.OPEN_TAG in wrapped and safety.CLOSE_TAG in wrapped
     # 围栏只做标注，绝不能删改原文——删掉就毁掉了证据
     assert INJECTION in wrapped
+
+
+# --- 写操作分发：登记了就必须接得上 --------------------------------------
+
+
+def test_每个写工具都在分发器里有实现():
+    """登记了写工具、却没在 ``apply_mutation`` 里接上 = 只有运行时才会炸。
+
+    这不是假想问题：provider 的工具就出过「登记了但调不动」的事故，
+    而且当时三层验证全都没发现，一直等评测跑到那个剧本才暴露。
+    源码级检查很土，但它能把这类错误提前到 `pytest` 这一秒。
+    """
+    import inspect
+
+    from omagent.tools import WRITE_TOOLS
+
+    src = inspect.getsource(K8sClient.apply_mutation)
+    missing = [t for t in WRITE_TOOLS if f'"{t}"' not in src]
+    assert not missing, (
+        f"这些写工具没有在 apply_mutation 里分发：{sorted(missing)}。"
+        f"登记了却接不上，模型一提就会报「未实现的写操作」。"
+    )
+
+
+class _Autoscaling:
+    """只记下被怎么调的假 autoscaling_v2。"""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def patch_namespaced_horizontal_pod_autoscaler(self, name, ns, body, dry_run=None):
+        self.calls.append({"name": name, "ns": ns, "body": body, "dry_run": dry_run})
+
+
+def _bare_hpa_client():
+    k = object.__new__(K8sClient)  # 跳过 __init__，不碰真集群
+    k.autoscaling_v2 = _Autoscaling()
+    return k
+
+
+def test_patch_hpa_target_整块替换且走dry_run():
+    """改 scaleTargetRef 必须**整块替换**，不能局部 patch。
+
+    留一半旧值（比如只换 name、apiVersion 还是旧的）比不改更危险：
+    HPA 会指向一个语义上不存在的东西。
+    """
+    k = _bare_hpa_client()
+    out = k._patch_hpa_target("demo", "api-gateway", {"target": "api-gateway"}, "All")
+
+    call = k.autoscaling_v2.calls[0]
+    assert call["name"] == "api-gateway" and call["ns"] == "demo"
+    assert call["dry_run"] == "All", "服务端干跑必须真的传下去"
+    assert call["body"]["spec"]["scaleTargetRef"] == {
+        "apiVersion": "apps/v1", "kind": "Deployment", "name": "api-gateway",
+    }
+    assert "api-gateway" in out
+
+
+def test_patch_hpa_target_空目标被拒():
+    """空 target 会让 HPA 失去扩缩对象——必须在进 API 之前就拒绝。"""
+    from omagent.k8s import ActionRejected
+
+    k = _bare_hpa_client()
+    with pytest.raises(ActionRejected, match="不能为空"):
+        k._patch_hpa_target("demo", "api-gateway", {"target": "   "}, None)
+    assert k.autoscaling_v2.calls == [], "被拒的请求不该真的发出去"

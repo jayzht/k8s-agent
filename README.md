@@ -206,6 +206,51 @@ bash sandbox/faults.sh list      # 看全部 15 个故障剧本
 > 不想 `pip install` 的话，`export PYTHONPATH="$PWD/src"` 之后用
 > `python -m omagent.cli <子命令>` 完全等价。
 
+`serve` 的常用参数：
+
+| 参数 | 作用 |
+|---|---|
+| `--host` / `--port` | 监听地址与端口（默认 `127.0.0.1:8765`） |
+| `--demo` | 打开界面上的「制造故障」按钮（沙箱演示用） |
+| `--write-namespaces demo staging …` | 覆盖「允许写」的命名空间列表 |
+| `--patrol-interval N` | 每 N 秒做一次主动巡检（`0` = 关，只做只读调查） |
+| `--no-observability` / `--prometheus-url U` / `--loki-url U` | 只读数据源 |
+| `--mcp-server "名字=命令"` / `--mcp-allow-read 服务:工具` | 接外部 MCP 只读工具（**不点名就不导入**） |
+| **`--allow-tool <名字>`** | **解锁一个默认锁着的禁区动作**，可重复。见下 |
+
+**`--allow-tool` 是这套系统里唯一一个"扩大能力"的开关**，所以单独说清楚：
+
+```bash
+omagent serve                                   # 默认：8 个禁区动作一个都不可用
+omagent serve --allow-tool delete_pvc           # 只打开删除 PVC 这一个
+
+# 有几个可解锁的就写几次；当前 UNLOCKABLE 里只有 delete_pvc 一个
+omagent serve --allow-tool delete_pvc --allow-tool <另一个已登记的名字>
+
+omagent serve --allow-tool apply_manifest       # ✗ 直接报错退出：它还没有安全实现
+```
+
+- **默认一个字都不变**：不写 `--allow-tool` 时，这些工具既不在模型可见的清单里，
+  也调不到。上面那条命令是**逐字**不同的两种启动方式，不是"默认打开、可关闭"。
+- **一个名字一个开关，不是 `--unsafe` 全开。** 8 个动作的风险差着量级
+  （读 Secret 和删命名空间不是一回事），而且审计里要看得出来"他到底开了哪个"。
+- **能解锁哪些由代码决定**（`tools.UNLOCKABLE`），不是一个随手能改的配置项。
+  每个可解锁的动作都必须在 `apply_mutation` 里有真正实现——有测试钉住这条，
+  防止解锁出来一个"看得见、一提就报未实现"的空壳。
+- **三个永久打不开**：`delete_namespace` / `modify_rbac` / `exec_in_pod`。
+  它们不是"还没实现"，是"实现了也不该有这条路"——理由是它们破坏的是
+  **架构前提**（见 [`docs/禁止清单之辩.md`](docs/禁止清单之辩.md)）。
+  其余 4 个（`apply_manifest` / `delete_pv` / `delete_workload` / `read_secret`）
+  仍在禁止清单里，但**还没有安全实现**，所以现在也解不开。
+- 解锁信息**启动时大声回显**（打印解锁了什么、各自什么风险），
+  然后 `omagent tools` 和界面上的「禁止动作」区都会同步显示"现在还剩什么动不了"。
+- 解锁**不等于免审批**：它仍然走完整的审批卡片、dry-run 复跑、命名空间白名单
+  和哈希链审计。而且首个可解锁动作 `delete_pvc` 是 `danger="severe"`——
+  **必须由人在卡片上手工输入 PVC 名字**才能点批准。
+
+> ⚠️ `--allow-tool` 只对 `serve` 生效。`omagent mcp` 只借出只读工具，
+> 写操作（包括解锁后的）根本不在 MCP 的 `tools/list` 里。
+
 ---
 
 ## 沙箱里有什么
@@ -331,7 +376,8 @@ ConfigMap（只有 order-service / payment-service / auth-service 有）；
 
 ```
 src/omagent/
-  tools.py     工具登记表 —— 唯一的安全切分点。15 个只读 + 10 个写，各自的 JSON Schema
+  tools.py     工具登记表 —— 唯一的安全切分点。15 个只读 + 15 个写，外加 1 个
+               默认锁着、可用 --allow-tool 解锁的禁区动作；各自带 JSON Schema
   agent.py     两条执行路径。run_readonly() 与 execute_write()，以及写操作的命名空间护栏
   session.py   对话循环。模型想调工具 → 只读就执行、写入就挂起等人批准 → 结果回灌
   llm.py       OpenAI 兼容的 function-calling 客户端（只用 requests，无 SDK 依赖）
@@ -349,7 +395,7 @@ src/omagent/
   evals.py     15 个剧本的确定性评测（判据可复算，不用 LLM 当裁判）
   models.py    数据契约
 web/           index.html / app.js / style.css —— 无构建步骤的原生前端
-tests/         安全内核 + 会话 + 工具表 + 监控台 + 大屏 + HTTP + MCP + provider（316 条）
+tests/         安全内核 + 会话 + 工具表 + 监控台 + 大屏 + HTTP + MCP + provider（351 条）
 sandbox/
   topology.py      沙箱拓扑表 → 生成 manifests/（改拓扑改这里）
   manifests/       生成的清单：3 个命名空间、25 个工作负载
@@ -394,7 +440,7 @@ docker-compose.sandbox.yml        本机 kind 沙箱（host 网络，原因见�
 
 ## 工具
 
-**只读（13 个）—— 自动执行，模型可以连续调用任意多轮**
+**只读（15 个）—— 自动执行，模型可以连续调用任意多轮**
 
 | 工具 | 用途 |
 |---|---|
@@ -411,31 +457,42 @@ docker-compose.sandbox.yml        本机 kind 沙箱（host 网络，原因见�
 | `get_resourcequota` | 配额上限与已用量 |
 | `get_replicasets` | ReplicaSet 与版本历史（回滚前必看） |
 | `get_pvc` | PVC 绑定状态与容量 |
+| `get_metrics` | 实际资源用量：谁在吃内存、离上限还有多远、节点利用率 |
+| `search_cases` | 查历史案例：同样的症状以前处理过吗、当时怎么修的、结果如何 |
 
 **每个写工具都必须有一个对应的读工具。** 这不是洁癖：`patch_hpa` 曾经是写工具，
 却没有任何读 HPA 的工具，于是模型**改得了一个自己读不了的对象**——它只能从事件里
 猜 HPA 的状态，被一条无关的噪音事件带偏，给出一份语气确定但根因错误的诊断
 （问"HPA 坏了吗"，它答"根因是 metrics-server 没装"）。
+这条规则对**默认锁着、可解锁的**动作同样成立：`delete_pvc` 也必须先能
+`get_pvc` 读清楚再动手——越是不可逆，越不能凭一句描述下结论。
 `tests/test_tools.py` 里有一条测试守着这条不变量：新增写工具而不登记读工具会直接失败。
 
-**写操作（10 个）—— 必须人工批准**
+**写操作（15 个）—— 必须人工批准**
 
 `rollout_restart` · `rollout_undo` · `scale_workload` · `delete_pod` ·
-`patch_resources` · `patch_hpa` · `cordon_node` · `uncordon_node` ·
-`drain_node` · `rollback_configmap`
+`patch_resources` · `patch_hpa` · `patch_hpa_target` · `cordon_node` ·
+`uncordon_node` · `drain_node` · `rollback_configmap` ·
+`patch_service_selector` · `patch_service_port` · `patch_probe` · `patch_node_selector`
 
 每个写工具的 schema 里 `rationale` 都是 **必填**——没有理由的写方案根本构造不出来。
 确认卡片上的"为什么"不能是可选的，否则运维人员只剩"信不信这个模型"一个判断依据，
 而那正是最不该依赖的东西。
 
-**禁止动作（8 个）—— 不在工具清单里**
+**禁止动作（8 个）—— 默认不在工具清单里**
 
 `delete_workload` · `delete_namespace` · `delete_pvc` · `delete_pv` ·
 `modify_rbac` · `read_secret` · `exec_in_pod` · `apply_manifest`
 
-这些**根本不出现在发给模型的工具清单里**——模型看不见，也就不会去调。
+这些**默认根本不出现**在发给模型的工具清单里——模型看不见，也就不会去调。
 列在代码里是为了第二条防线：万一名字从别处冒出来（旧会话、手搓请求、模型幻觉），
 执行器能明确拒绝它，而不是报"未知工具"。
+
+这 8 个里，**`delete_pvc` 可以用 `--allow-tool delete_pvc` 在启动时显式解锁**
+（解锁后进清单、仍然要审批、且是 `severe` 档位要手输名字）；
+**`delete_namespace` / `modify_rbac` / `exec_in_pod` 是永久禁止**，任何参数都打不开。
+禁止清单的实现是"默认拒绝 + 显式解锁"（`tools.is_forbidden()`），
+所有拦截点都走这一个函数——**这就是为什么解禁不会留下一处"解锁了却还是被拦"的死角**。
 
 ---
 
@@ -456,10 +513,17 @@ docker-compose.sandbox.yml        本机 kind 沙箱（host 网络，原因见�
 | 11 | **防 CSRF** —— 写请求必须带自定义头（跨站发不出），叠加 SameSite=Strict | `web.Handler._check_csrf()` |
 | 12 | **审计链可检出篡改** —— 追加写 + 哈希链 | `audit.verify()` |
 | 13 | **集群里读到的文字不等于指令** —— 日志/事件里的载荷被围栏化、计分、告警，绝不删改原文 | `safety.wrap()` / `session._append_tool_result()` |
+| 14 | **默认锁着 + 显式解锁，且解锁不等于免审批** —— 没 `--allow-tool` 时禁区动作不在清单、也调不到；解锁后仍走完整审批，`severe` 还要手输名字 | `tools.is_forbidden()` / `agent.run_readonly()` |
+| 15 | **"告诉模型它有什么能力"的地方与实际能力同源** —— 系统提示词按解锁状态动态生成，工具清单说"你能"时提示词不会说"你不能" | `session.system_prompt()` |
+| 16 | **消息历史永远满足 tool_calls/tool 配对** —— 同回合剩余的调用一起落盘，重启后按历史补齐缺失结果（插在已回来的那段之后），不篡改排查记录 | `session.repair_orphan_tool_calls()` |
 
 ```bash
-.venv/bin/python -m pytest -q     # 188 passed（安全内核 / 会话 / 工具表 / 监控台 / HTTP 层）
+.venv/bin/python -m pytest tests/     # 351 passed（安全内核 / 会话 / 工具表 / 监控台 / HTTP 层）
 ```
+
+> 数字是 2026-10-14 在本机实跑的结果（`--collect-only` 也是 351）。
+> `pytest.ini` 的 `addopts` 已经带了 `-q`，命令行上再写一个 `-q` 会把最后那行
+> `N passed` 统计一起吞掉，只剩进度点——退出码仍然是 0，但看不到总数。
 
 ### 提示注入：能写日志的人，就能往模型嘴里塞话
 
@@ -512,6 +576,18 @@ python -m omagent.cli eval        # 15 个剧本，真模型真集群，约 11 �
 | **避坑（不提"看着对症其实没用"的动作）** | **100%** |
 | 动作（该提的提对、没工具的明说） | 87% |
 | **抗注入** | **1/1**（日志里的载荷没被照做，且主动报告） |
+
+> **已更新（2026-10-14）**：上面这张表是**早期五轮**的合并估计，保留下来是为了
+> 记录当时是怎么判断的。之后的进展简记：
+> 三个可复现短板已全部修掉，**最新一次干净全量单跑是 15/15**
+> （`omagent eval --settle 22`，查证 / 避坑 / 动作 100% / 100% / 100%，
+> 抗注入 1/1，672.5s / 501,058 token）；`crash` 那一层真因是上下文被写坏导致 400，
+> 属代码缺陷，已修；`crash`/`config` 单跑也是 **2/2**；
+> 新增 `patch_hpa_target` 之后，`hpa` 从"只能明说没工具"变成**可以真的修**，
+> 而且这次全量里它**确实提出了 `patch_hpa_target`**——工具不是加了摆着看的。
+> ⚠️ **但不要报"100%"**：这是一次采样，不是期望值。诚实的说法是
+> **基线 10~11/15 → 稳定在 12~15/15，最新一次 15/15**。
+> 全过程（含被推翻的判断）见 [`docs/eval-report.md`](docs/eval-report.md)。
 
 **一共跑了五轮**（配置完全一致，75 次场景运行）。单轮通过率在 10~11/15 之间抖动，
 合并后的最佳估计是 **12/15（80%）**，**三个可复现的短板**：
@@ -629,11 +705,12 @@ python -m omagent.cli mcp --namespace demo
 
 **协议上只暴露 15 个只读工具，写工具根本不出现在 `tools/list` 里。**
 这不是"调了再拒绝"，是客户端压根看不见——和 `tools.FORBIDDEN` 同一个思路。
+（`--allow-tool` 解锁出来的禁区动作同样不上 MCP：MCP 这一侧**只借只读能力**。）
 
 为什么不一起暴露？因为 MCP 的信任边界是**客户端自己的那个模型**，
 而我们不接受它作为审批人。如果把写工具挂上去，执行权就从"人点确认卡片"
 变成了"客户端自己决定"，整套审批、dry-run、命名空间白名单、审计全部被绕过。
-`tools/call` 对写工具、`FORBIDDEN` 里的动作、以及任何未登记的名字一律 fail closed。
+`tools/call` 对写工具、`is_forbidden()` 为真的动作、以及任何未登记的名字一律 fail closed。
 
 需要改集群？去监控台。那里坐着人。
 
@@ -826,6 +903,12 @@ v0.1 有一层现在已经被删掉的东西：`config/policy.yaml` 里的 T0–
 
 保留下来的是**真正不可绕过的那部分**：工具级的读写切分、审批凭证绑定、
 参数白名单、dry-run、命名空间护栏、审计链。这些不是策略，是结构。
+
+> 后来加的 `--allow-tool`（禁区动作"默认锁着 + 启动时逐名解锁"）**不是这套规则引擎
+> 换了个名字回来**：它没有规则文件、没有条件、没有运行时判断，就是
+> "哪个名字出现在命令行里"这么一个由代码枚举的开关，而且解锁出来的动作
+> 仍然走上面全部结构性约束。区别在于：规则引擎拦的是**没预料到的组合**，
+> 而这里开的是**已经实现且验证过的那一个动作**。
 
 > 描述旧架构的文档已移到 [`docs/archive/`](docs/archive/)，
 > 其中的调研结论和踩坑记录仍然有价值，但里面的命令已经跑不通了。

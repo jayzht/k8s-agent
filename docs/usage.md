@@ -235,11 +235,51 @@ python -m omagent.cli cases --limit 5
 
 ```bash
 python -m omagent.cli serve [--host H] [--port P] [--demo]
-python -m omagent.cli tools          # 工具清单 + 读写切分 + 禁止动作
+python -m omagent.cli serve --allow-tool delete_pvc   # 解锁一个默认锁着的禁区动作
+python -m omagent.cli tools          # 工具清单 + 读写切分 + 禁止动作 + 已解锁
 python -m omagent.cli audit          # 校验审计链有没有被篡改
 python -m omagent.cli status         # 模型接口 / 模型名 / Key 是否配好
 python -m omagent.cli mcp            # 以 MCP server 运行（stdio，只读工具）
 ```
+
+### `--allow-tool`：解锁禁区动作（默认全锁着）
+
+有 8 个动作默认是禁止的（删命名空间 / 删 PVC / 删 PV / 删工作负载 / 改 RBAC /
+读 Secret / 进 Pod 执行 / 应用任意 YAML）。其中**只有 `delete_pvc` 可以在启动时
+显式解锁**：
+
+```bash
+# 默认：8 个都不可用，模型看不见也调不到
+python -m omagent.cli serve
+
+# 只打开删除 PVC 这一个
+python -m omagent.cli serve --allow-tool delete_pvc
+
+# 有几个可解锁的就写几次（当前只有 delete_pvc 一个）
+python -m omagent.cli serve --allow-tool delete_pvc
+```
+
+几条要记住的：
+
+- **一个名字一个开关**，不是 `--unsafe` 全开。风险差着量级，审计里也要能看清
+  他到底开了哪个。
+- **能解锁哪些由代码决定**，不是配置项。没实现的动作解不开——
+  启动时会直接报错退出（而不是静默忽略：参数敲错却照常起来，
+  比起不来更糟，因为你会以为自己已经打开了）。
+- **三个永久打不开**：`delete_namespace` / `modify_rbac` / `exec_in_pod`。
+  它们破坏的是架构前提（提权 / 破边界），不是"还没实现"。
+- **解锁不等于免审批**：解锁后的动作照样进审批卡片、dry-run 复跑、
+  命名空间白名单、审计链。而且 `delete_pvc` 是 `severe` 档位，
+  **批准时必须手输 PVC 名字**（输错、没输，按钮都是禁用的）。
+- 启动日志会**大声回显**解锁了什么；`omagent tools` 和界面上的「禁止动作」区
+  会把已解锁的从禁止清单里去掉——不会出现"同时出现在工具清单和禁止清单里"
+  这种让人没法判断的显示。
+- ⚠️ `--allow-tool` 只对 `serve` 生效。`omagent mcp` 只借出只读工具，
+  写操作（包括解锁后的）根本不在 MCP 的清单里。
+
+> 为什么 `delete_pvc` 的安全边界**不靠 dry-run**：服务端对删除的 dry-run
+> **不校验任何后果**（实测：删一个正在被 Pod 使用的 PVC，`--dry-run=server`
+> 照样返回成功）。所以它的边界是「默认锁着 + severe 手输名字 + 审计」。
 
 ### 接到别的 MCP 客户端上用
 
@@ -398,12 +438,15 @@ kubectl apply -f sandbox/manifests/  # 应用
 python -m omagent.cli serve --write-namespaces demo staging test
 ```
 
-**Agent 永远不做的事**（这些工具根本不在它的清单里，它看不见也就调不到）：
+**Agent 默认不做的事**（这些工具默认根本不在它的清单里，它看不见也就调不到）：
 
 删除工作负载 / 删除命名空间 / 删除 PVC / 删除 PV / 修改 RBAC /
 读取 Secret / 在 Pod 里执行任意命令 / 应用任意 YAML。
 
-如果确实需要这些操作，只能由人手工执行。
+这 8 个分三种状态：`delete_pvc` **可以用 `--allow-tool delete_pvc` 显式解锁**
+（解锁后仍要审批，且要手输 PVC 名字）；`delete_namespace` / `modify_rbac` /
+`exec_in_pod` 是**永久禁止**；`apply_manifest` / `delete_pv` / `delete_workload` /
+`read_secret` **还没有安全实现，所以解不开**。没有解锁的动作，只能由人手工执行。
 
 ---
 

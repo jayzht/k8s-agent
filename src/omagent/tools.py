@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+import threading
 
 # ---------------------------------------------------------------------------
 # 工具定义
@@ -276,6 +277,17 @@ _WRITE: list[ToolSpec] = [
         ),
     ),
     ToolSpec(
+        "patch_hpa_target", True,
+        "改 HPA 的扩缩容目标（scaleTargetRef 被指到不存在的负载、"
+        "副本数完全不动时用；⚠️ 指错对象会给别的负载扩缩容）",
+        _wobj({"namespace": _NS, "hpa": {"type": "string", "description": "HPA 名"},
+               "target": {"type": "string", "description": "要指向的工作负载名"},
+               "kind": {"type": "string", "description": "默认 Deployment"},
+               "api_version": {"type": "string", "description": "默认 apps/v1"}},
+              ["namespace", "hpa", "target"]),
+        danger="caution",
+    ),
+    ToolSpec(
         "cordon_node", True, "标记节点不可调度（不影响已在运行的 Pod）",
         _wobj({"node": {"type": "string"}}, ["node"]),
         namespace_scoped=False,   # 节点级动作，没有命名空间这回事
@@ -331,6 +343,125 @@ FORBIDDEN: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# 默认锁着、但**可以显式解锁**的禁区工具
+# ---------------------------------------------------------------------------
+#
+# 这一段是被运维人员问出来的。原来的做法是**一律禁止**：上面 8 个动作
+# 永远不可用。但那个反驳是对的——**最终都要人来审批**，一刀切只会让系统
+# 变窄：遇到"这个 PVC 就是上次删工作负载留下的残留，删了没事"的时候，
+# Agent 只能干看着，人还是得自己开终端。
+#
+# 所以改成**默认锁着 + 启动时显式解锁**：
+#
+#   - 默认行为**一个字没改**：不在工具清单里，模型看不见、调不到；
+#   - 运维用 `--allow-tool <名字>` 在启动时单独打开某一个；
+#   - 能打开哪些由**代码**决定（`UNLOCKABLE`），不是一个随手能改的开关：
+#     每个可解锁的工具都必须自带**能用的 dry-run** 和参数化实现。
+#
+# 为什么不做一个 `--unsafe` 全开：那等于把 8 个决定合并成 1 个，而它们的
+# 风险根本不是一回事（读 Secret 和删命名空间差着量级）。一个名字一个开关，
+# 运维得为每一个**单独**做决定，审计里也看得出来他到底开了哪个。
+#
+# 为什么解锁出来的都标 `severe`：能进这个列表的基本都不可逆，而
+# **被动警告会脱敏**——红色横幅点几次就顺手了。真正拦得住的是**摩擦**：
+# 让人手输目标名字。GitHub 删仓库、改 package 可见性用的是同一个办法。
+
+LOCKED_WRITE: tuple[ToolSpec, ...] = (
+    ToolSpec(
+        "delete_pvc", True,
+        # ⚠️ 这里**只描述这个动作做什么**，不要写"默认锁着、需要 --allow-tool"。
+        # 踩过的坑：写了那句之后，模型读到的是"这个工具现在是锁着的"，
+        # 于是它明明看得见也不提卡片，还会回一句"我没有删除类工具"。
+        # 解锁方式属于**给运维看的**信息，放在 --allow-tool 的帮助和文档里。
+        "删除一个 PVC（⚠️ 不可逆、会丢数据；服务端 dry-run 对删除不提供保护）",
+        _wobj({"namespace": _NS, "name": {"type": "string", "description": "PVC 名"}},
+              ["namespace", "name"]),
+        danger="severe",
+    ),
+)
+
+LOCKED_SPECS: dict[str, ToolSpec] = {t.name: t for t in LOCKED_WRITE}
+LOCKED_WRITE_TOOLS: tuple[str, ...] = tuple(t.name for t in LOCKED_WRITE)
+
+# 可以用 `--allow-tool` 打开的。**必须已经在 apply_mutation 里实现**，
+# 否则解锁出来的是一个"看得见、一提就报未实现"的空壳。
+UNLOCKABLE: dict[str, str] = {
+    "delete_pvc": "删除单个 PVC。不可逆、会丢数据，所以是 severe（要手输名字）。",
+}
+
+# 任何方式都打不开的。跟 UNLOCKABLE 分开，是为了让"永久"这两个字有依据：
+# 它们不是"还没实现"，而是"就算实现了也不该有这条路"。
+PERMANENTLY_FORBIDDEN: dict[str, str] = {
+    "delete_namespace": "删除命名空间。一次抹掉整个命名空间的全部对象，"
+                        "代价无法收敛，也没有哪次值班需要它。",
+    "modify_rbac": "修改 RBAC。这是**提权路径**——它能把上面所有约束一次性解开，"
+                   "包括把 Agent 自己变成集群管理员。",
+    "exec_in_pod": "在 Pod 内执行任意命令。等于绕过整个参数化工具层，"
+                   "把集群交给模型自由发挥。",
+}
+
+_unlocked: set[str] = set()
+_unlock_lock = threading.Lock()
+
+
+def unlock_tool(name: str) -> None:
+    """显式解锁一个禁区工具。只有 ``UNLOCKABLE`` 里的能解锁。
+
+    解锁失败一律**抛异常**，不做"静默忽略"：启动参数写错了却照常起来，
+    运维会以为自己已经打开了，实际没有——那比直接起不来更糟。
+    """
+    if name in PERMANENTLY_FORBIDDEN:
+        raise ValueError(
+            f"{name} 是**永久禁止**动作，任何参数都打不开：{PERMANENTLY_FORBIDDEN[name]}")
+    if name not in UNLOCKABLE:
+        rest = len(FORBIDDEN) - len(UNLOCKABLE) - len(PERMANENTLY_FORBIDDEN)
+        raise ValueError(
+            f"{name} 不是可解锁的动作。当前可解锁的只有：{sorted(UNLOCKABLE)}"
+            f"（其余 {len(PERMANENTLY_FORBIDDEN)} 个是永久禁止，"
+            f"{rest} 个还没有安全实现）")
+    with _unlock_lock:
+        _unlocked.add(name)
+
+
+def unlocked_tools() -> dict[str, ToolSpec]:
+    """已解锁的工具定义。默认返回空——**没解锁时一切照旧**。"""
+    with _unlock_lock:
+        return {n: s for n, s in LOCKED_SPECS.items() if n in _unlocked}
+
+
+def unlocked_names() -> tuple[str, ...]:
+    with _unlock_lock:
+        return tuple(sorted(_unlocked))
+
+
+def is_forbidden(name: str) -> bool:
+    """这个工具现在是不是被禁止的？
+
+    默认**是**（fail closed）。只有 `--allow-tool` 显式解锁过的才返回 False。
+    所有拦截点都必须走这个函数，而不是直接查 ``FORBIDDEN``——否则会留下一处
+    "解锁了但还是被拦"的死角，而且那种不一致极难排查。
+    """
+    with _unlock_lock:
+        if name in _unlocked:
+            return False
+    return name in FORBIDDEN
+
+
+def forbidden_now() -> dict[str, str]:
+    """**当前仍然**被禁止的动作（已解锁的不算）。给界面和 ``omagent tools`` 用。
+
+    为什么要跟 ``FORBIDDEN`` 分开：``FORBIDDEN`` 是"默认拒绝清单"，
+    它的用途是**生成拒绝时的说明文字**，所以必须是全量、且不随运行时变化。
+    而界面上要回答的是另一个问题——"现在到底什么动不了"。
+    混用会出现最尴尬的显示：某个工具**同时**出现在工具清单和禁止清单里，
+    运维完全没法判断它到底能不能用。
+    """
+    with _unlock_lock:
+        opened = set(_unlocked)
+    return {k: v for k, v in FORBIDDEN.items() if k not in opened}
+
+
 def is_mutating(name: str) -> bool:
     """未登记的工具**默认是写操作**（fail closed）。
 
@@ -341,26 +472,41 @@ def is_mutating(name: str) -> bool:
 
 
 def openai_tool_schema() -> list[dict[str, Any]]:
-    """把工具清单转成 OpenAI/DeepSeek 的 function-calling 格式。"""
+    """把工具清单转成 OpenAI/DeepSeek 的 function-calling 格式。
+
+    **包含已解锁的禁区工具**——不解锁就一个都不出现，这跟以前完全一致。
+    """
+    def _describe(spec: ToolSpec) -> str:
+        text = spec.summary
+        if spec.mutating:
+            text += "（写操作：调用后不会立即执行，需要运维人员确认）"
+        if spec.danger == "severe":
+            text += "（⚠️ 高危且不可逆：批准时必须由人手工输入目标名字）"
+        return text
+
+    specs = [*TOOLS.values(), *unlocked_tools().values()]
     return [
         {
             "type": "function",
             "function": {
                 "name": spec.name,
-                "description": (
-                    f"{spec.summary}"
-                    + ("" if not spec.mutating else "（写操作：调用后不会立即执行，需要运维人员确认）")
-                ),
+                "description": _describe(spec),
                 "parameters": spec.schema,
             },
         }
-        for spec in TOOLS.values()
+        for spec in specs
     ]
 
 
 def ui_tool_list() -> list[dict[str, Any]]:
-    """给前端「工具能力」面板用的清单。"""
+    """给前端「工具能力」面板用的清单。
+
+    **带上已解锁的禁区工具**：运维在命令行开了 `--allow-tool`，界面上却看不到，
+    就会以为没生效——那正好是"配置和实际不一致"这类最难查的问题。
+    同时把 danger 一起带出去，前端才能把 severe 渲染成手输确认。
+    """
     return [
-        {"name": s.name, "mutating": s.mutating, "summary": s.summary}
-        for s in TOOLS.values()
+        {"name": s.name, "mutating": s.mutating, "summary": s.summary,
+         "danger": s.danger, "unlocked": s.name in unlocked_tools()}
+        for s in (*TOOLS.values(), *unlocked_tools().values())
     ]

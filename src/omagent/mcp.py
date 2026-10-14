@@ -32,7 +32,7 @@ import sys
 from typing import Any, IO
 
 from . import safety
-from .tools import FORBIDDEN, READONLY_TOOLS, TOOLS, is_mutating
+from .tools import FORBIDDEN, READONLY_TOOLS, TOOLS, is_forbidden, is_mutating
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "omagent"
@@ -87,7 +87,7 @@ class McpServer:
         写工具、禁止动作、未登记的名字都在这里被拦下。注意 ``is_mutating``
         对未登记工具默认返回 True，所以这里的判断是 fail closed 的。
         """
-        if name in FORBIDDEN:
+        if is_forbidden(name):
             raise ToolRefused(
                 f"{name} 属于禁止动作：{FORBIDDEN[name]}"
             )

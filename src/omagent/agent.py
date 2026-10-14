@@ -29,6 +29,10 @@ from .models import Decision, ExecutionResult, Impact, Proposal, Target
 from .providers import ProviderRegistry
 from .tools import (
     FORBIDDEN,
+    forbidden_now,
+    is_forbidden,
+    unlocked_names,
+    unlocked_tools,
     RATIONALE_FIELD,
     TOOLS,
     ToolSpec,
@@ -89,13 +93,16 @@ class OpsAgent:
         return ui_tool_list() + self.providers.ui_list()
 
     def all_tool_specs(self) -> dict[str, ToolSpec]:
+        # 顺序：内置 → 已解锁的禁区工具 → provider。
+        # 解锁的工具默认不在里面，所以**没加 --allow-tool 时行为一个字不变**。
         out: dict[str, ToolSpec] = dict(TOOLS)
+        out.update(unlocked_tools())
         out.update({s.name: s for s in self.providers.specs()})
         return out
 
     def spec_of(self, tool: str) -> ToolSpec | None:
-        """内置工具优先，其次看已装配的 provider。"""
-        return TOOLS.get(tool) or self.providers.spec(tool)
+        """内置优先，其次已解锁的禁区工具，最后已装配的 provider。"""
+        return TOOLS.get(tool) or unlocked_tools().get(tool) or self.providers.spec(tool)
 
     def is_mutating(self, tool: str) -> bool:
         """这个工具是不是写操作？
@@ -120,7 +127,7 @@ class OpsAgent:
         否则出了事没人能复盘它的判断依据。
         """
         started = time.time()
-        if tool in FORBIDDEN:
+        if is_forbidden(tool):
             raise GateViolation(f"{tool} 属于禁止动作：{FORBIDDEN[tool]}")
         # 内置 K8s 工具为主；不在内置表里的，看是不是已装配的 provider 工具。
         # 两边都没有 → 拒绝（fail closed）。
@@ -211,7 +218,7 @@ class OpsAgent:
         """
         trace_id = trace_id or new_trace_id()
 
-        if tool in FORBIDDEN:
+        if is_forbidden(tool):
             raise GateViolation(f"{tool} 属于禁止动作，不会被生成方案：{FORBIDDEN[tool]}")
         spec = self.spec_of(tool)
         if spec is None:
@@ -280,7 +287,7 @@ class OpsAgent:
                  "tool": prop.tool, "proposal_id": prop.proposal_id, **extra},
             )
 
-        if prop.tool in FORBIDDEN:
+        if is_forbidden(prop.tool):
             violation("forbidden_tool")
             return result("refused", error=f"{prop.tool} 属于禁止动作：{FORBIDDEN[prop.tool]}")
 
@@ -414,18 +421,43 @@ class OpsAgent:
             )
         return clean
 
+    # 工具 → 目标资源类型 + 取名字的参数。
+    #
+    # **必须显式登记，不要靠兜底。** 原来这里是一串 if 加一个
+    # `params.get("kind", "deployment").capitalize()`，于是任何没被 if 命中的
+    # 工具都会被**默默当成 Deployment**，名字取 `params["name"]`。
+    # 真实后果（一次核对里全暴露出来）：
+    #   · delete_pvc            → "Deployment/scratch-migration-temp"（明明是 PVC）
+    #   · patch_hpa_target      → "Deployment/"（名字空）
+    #   · patch_service_selector→ "Deployment/"（名字空，它用的是 service 参数）
+    #   · patch_service_port    → "Deployment/"（同上）
+    # 确认卡片是这套系统唯一让人做决定的地方，这些错误恰好全落在那一屏上。
+    _TARGET: dict[str, tuple[str, str]] = {
+        "cordon_node": ("Node", "node"),
+        "uncordon_node": ("Node", "node"),
+        "drain_node": ("Node", "node"),
+        "delete_pod": ("Pod", "pod"),
+        "delete_pvc": ("PersistentVolumeClaim", "name"),
+        "rollback_configmap": ("ConfigMap", "name"),
+        "patch_hpa": ("HorizontalPodAutoscaler", "hpa"),
+        "patch_hpa_target": ("HorizontalPodAutoscaler", "hpa"),
+        "patch_service_selector": ("Service", "service"),
+        "patch_service_port": ("Service", "service"),
+    }
+
     @staticmethod
     def target_of(spec: ToolSpec, params: dict[str, Any]) -> Target:
         """从参数推出"这个动作作用在谁身上"，供审批卡片展示。"""
         ns = params.get("namespace", "")
         if spec.name in ("cordon_node", "uncordon_node", "drain_node"):
+            # 节点是集群级的，没有命名空间
             return Target(kind="Node", namespace="", name=params.get("node", ""))
-        if spec.name == "patch_hpa":
-            return Target(kind="HorizontalPodAutoscaler", namespace=ns, name=params.get("hpa", ""))
-        if spec.name == "delete_pod":
-            return Target(kind="Pod", namespace=ns, name=params.get("pod", ""))
-        if spec.name == "rollback_configmap":
-            return Target(kind="ConfigMap", namespace=ns, name=params.get("name", ""))
+        hit = OpsAgent._TARGET.get(spec.name)
+        if hit:
+            kind, key = hit
+            return Target(kind=kind, namespace=ns, name=params.get(key, ""))
+        # 其余的（rollout_* / scale_workload / patch_resources / patch_probe /
+        # patch_node_selector）都是针对工作负载的，kind 参数说的是哪种工作负载。
         return Target(
             kind=params.get("kind", "deployment").capitalize(),
             namespace=ns,
@@ -605,7 +637,10 @@ class OpsAgent:
         return {
             "operator": self.operator,
             "write_namespaces": list(self.write_namespaces),
-            "tools": {n: {"mutating": s.mutating} for n, s in TOOLS.items()},
-            "forbidden": FORBIDDEN,
+            "tools": {n: {"mutating": s.mutating}
+                      for n, s in {**TOOLS, **unlocked_tools()}.items()},
+            # 报"现在**还**禁止什么"，不是默认清单——见 forbidden_now 的说明
+            "forbidden": forbidden_now(),
+            "unlocked": list(unlocked_names()),
             "audit": str(self.audit.path),
         }

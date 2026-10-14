@@ -13,7 +13,18 @@ import pytest
 from omagent.agent import GateViolation, OpsAgent
 from omagent.audit import AuditLog
 from omagent.models import Decision, Proposal, Target
-from omagent.tools import FORBIDDEN, READONLY_TOOLS, TOOLS, WRITE_TOOLS, openai_tool_schema
+from omagent.tools import (
+    FORBIDDEN,
+    LOCKED_WRITE_TOOLS,
+    PERMANENTLY_FORBIDDEN,
+    READONLY_TOOLS,
+    TOOLS,
+    UNLOCKABLE,
+    WRITE_TOOLS,
+    is_forbidden,
+    openai_tool_schema,
+    unlock_tool,
+)
 
 from .fakes import FakeK8s
 
@@ -23,6 +34,22 @@ def agent(tmp_path):
     k8s = FakeK8s()
     audit = AuditLog(tmp_path / "audit.jsonl")
     return OpsAgent(k8s, audit, operator="tester"), k8s, audit
+
+
+@pytest.fixture()
+def 解锁状态隔离():
+    """解锁是**进程级全局状态**，测试之间会互相污染。
+
+    没有这个 fixture 的话，某个测试解锁了 delete_pvc，后面的"默认锁着"断言
+    就会莫名其妙地失败——而那种失败最难查，因为单跑那个测试是绿的。
+    """
+    from omagent import tools as t
+
+    before = set(t._unlocked)
+    yield
+    with t._unlock_lock:
+        t._unlocked.clear()
+        t._unlocked.update(before)
 
 
 # ── 工具登记表本身的一致性 ────────────────────────────────────────────────
@@ -50,6 +77,130 @@ def test_模型看不到任何禁止动作():
     names = {t["function"]["name"] for t in openai_tool_schema()}
     assert names == set(TOOLS)
     assert not (names & set(FORBIDDEN))
+
+
+# ── 默认锁着 + 显式解锁 ───────────────────────────────────────────────────
+#
+# 这一组守的是那次讨论的结论：运维说得对——**最终都要人审批**，
+# 一刀切禁止只会让系统变窄。所以改成"默认锁着 + 启动时一个一个显式打开"。
+#
+# 但**默认必须一个字都不变**：不写 --allow-tool 时，这些工具既不在清单里，
+# 也调不动。下面第一条就是钉这个的。
+
+
+def test_默认状态下禁区工具完全不可见也调不动(agent):
+    """没解锁时：不在清单、不在 schema、is_forbidden 为真。"""
+    ag, k8s, _ = agent
+    assert not (set(LOCKED_WRITE_TOOLS) & set(TOOLS)), "禁区工具不该混进静态表"
+    names = {t["function"]["name"] for t in ag.tool_schema()}
+    for name in LOCKED_WRITE_TOOLS:
+        assert name not in names, f"{name} 没解锁却出现在模型可见的清单里"
+        assert is_forbidden(name), f"{name} 默认就该是禁止的"
+        assert ag.spec_of(name) is None, f"{name} 没解锁却能被 spec_of 找到"
+        with pytest.raises(GateViolation, match="禁止动作"):
+            ag.run_readonly(name, {"namespace": "demo", "name": "x"})
+    assert k8s.readonly_calls == []
+
+
+def test_解锁之后模型才看得见(agent, 解锁状态隔离):
+    ag, _, _ = agent
+    assert "delete_pvc" not in {t["function"]["name"] for t in ag.tool_schema()}
+
+    unlock_tool("delete_pvc")
+
+    names = {t["function"]["name"] for t in ag.tool_schema()}
+    assert "delete_pvc" in names, "解锁了却还是看不见，那 --allow-tool 等于没做"
+    assert is_forbidden("delete_pvc") is False
+    spec = ag.spec_of("delete_pvc")
+    assert spec is not None and spec.mutating is True
+    assert ag.is_mutating("delete_pvc") is True, "解锁不等于变成只读——它必须仍然走审批"
+
+
+def test_解锁的工具仍然会走只读路径被拒(agent, 解锁状态隔离):
+    """核心不变量：**解锁的是"能不能提议"，不是"能不能直接执行"。**"""
+    ag, k8s, _ = agent
+    unlock_tool("delete_pvc")
+    with pytest.raises(GateViolation, match="会改变集群状态"):
+        ag.run_readonly("delete_pvc", {"namespace": "demo", "name": "data-0"})
+    assert k8s.readonly_calls == []
+
+
+def test_永久禁止的动作任何方式都打不开(解锁状态隔离):
+    """delete_namespace / modify_rbac / exec_in_pod 不是"还没实现"，
+    而是"实现了也不该有这条路"——它们不能被 --allow-tool 打开。"""
+    for name in PERMANENTLY_FORBIDDEN:
+        with pytest.raises(ValueError, match="永久禁止"):
+            unlock_tool(name)
+        assert is_forbidden(name) is True
+
+
+def test_不能解锁没实现的动作(解锁状态隔离):
+    """能解锁的必须已经在 apply_mutation 里有实现，否则解锁出来是个空壳：
+    模型看得见、一提就报「未实现的写操作」。"""
+    assert "delete_pvc" not in LOCKED_WRITE_TOOLS or "delete_pvc" in UNLOCKABLE
+    for name in sorted(set(FORBIDDEN) - set(UNLOCKABLE) - set(PERMANENTLY_FORBIDDEN)):
+        with pytest.raises(ValueError, match="不是可解锁的动作"):
+            unlock_tool(name)
+
+
+def test_可解锁的工具都在分发器里有实现():
+    """源码级检查：UNLOCKABLE 里的每个名字都得在 apply_mutation 里接上。
+
+    跟写工具那条检查同一个道理——只是这条更该严，因为解锁出来的都是
+    不可逆动作，"提了才发现没实现"的代价更大。
+    """
+    import inspect
+
+    from omagent.k8s import K8sClient
+
+    src = inspect.getsource(K8sClient.apply_mutation)
+    missing = [n for n in UNLOCKABLE if f'"{n}"' not in src]
+    assert not missing, f"这些可解锁动作没有实现：{sorted(missing)}"
+
+
+def test_severe档位的工具必须真的要求手输确认():
+    """`severe` 不能只是个标签——它在协议层的含义是"前端必须让人手输目标名字"。
+
+    当前唯一用它的就是解锁出来的禁区工具，所以这条断言顺便把
+    "severe 到底有没有被验证过"这件事钉住：以前它是个从没被走过的分支。
+    """
+    from omagent.tools import LOCKED_SPECS
+
+    severe = [s for s in LOCKED_SPECS.values() if s.danger == "severe"]
+    assert severe, "没有任何工具使用 severe —— 那这个档位就是没验证过的死代码"
+    for spec in severe:
+        assert spec.mutating, f"{spec.name} 是 severe 却只读，走不到确认卡片"
+
+
+def test_系统提示词必须跟着解锁状态变(解锁状态隔离):
+    """解锁了工具、提示词却说"你没有这个能力"，等于白解锁。
+
+    真事：`--allow-tool delete_pvc` 做完之后，**模型看见了 delete_pvc 却不提卡片**，
+    还回一句"我没有任何删除类工具，这必须由你手工执行"。查下来是系统提示词里
+    写死了一句"你没有任何删除类工具"——工具清单说"你能"，系统提示说"你不能"，
+    模型选了后者。
+
+    所以凡是"告诉模型它有什么能力"的地方都必须跟实际能力**同源**。
+    """
+    from omagent.session import system_prompt
+    from omagent.tools import unlocked_tools
+
+    off = system_prompt()
+    assert "你没有任何删除类工具" in off, "默认状态必须保持原来的边界说法"
+    assert "__边界__" not in off, "占位符没被替换掉，提示词是坏的"
+
+    unlock_tool("delete_pvc")
+    on = system_prompt()
+
+    assert "你没有任何删除类工具" not in on, (
+        "解锁之后提示词还在说'你没有删除工具'——模型会据此拒绝提卡片")
+    assert "delete_pvc" in on, "解锁的工具名必须出现在提示词里"
+    assert "不可逆" in on and "会丢什么" in on, (
+        "既然放开了删除，就必须同时告诉模型怎么把风险讲清楚")
+    assert "__边界__" not in on
+    # 没解锁的不能跟着一起被放出来
+    assert "modify_rbac" not in on and "exec_in_pod" not in on
+    assert unlocked_tools(), "前提：这一步应该是解锁状态"
 
 
 def test_每个写工具都强制要求写理由():

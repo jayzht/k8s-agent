@@ -15,6 +15,7 @@ from omagent.tools import (
     FORBIDDEN,
     READONLY_TOOLS,
     TOOLS,
+    LOCKED_WRITE_TOOLS,
     WRITE_TOOLS,
     is_mutating,
     openai_tool_schema,
@@ -31,6 +32,7 @@ READ_FOR_WRITE: dict[str, set[str]] = {
     "delete_pod": {"get_pods"},
     "patch_resources": {"get_workload"},
     "patch_hpa": {"get_hpa"},
+    "patch_hpa_target": {"get_hpa"},
     "cordon_node": {"get_nodes"},
     "uncordon_node": {"get_nodes"},
     "drain_node": {"get_nodes", "get_pdb"},
@@ -40,13 +42,16 @@ READ_FOR_WRITE: dict[str, set[str]] = {
     "patch_service_port": {"get_services"},
     "patch_probe": {"get_workload"},
     "patch_node_selector": {"get_workload", "get_nodes"},
+    # 默认锁着的禁区工具。**解锁不等于不需要读**——恰恰相反：
+    # 越是不可逆的动作，越要保证模型能先把对象读清楚再动手。
+    "delete_pvc": {"get_pvc"},
 }
 
 
 # ── 读写对称性 ────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("write_tool", WRITE_TOOLS)
+@pytest.mark.parametrize("write_tool", (*WRITE_TOOLS, *LOCKED_WRITE_TOOLS))
 def test_每个写工具都有对应的读工具(write_tool):
     readers = READ_FOR_WRITE.get(write_tool, set())
     assert readers, f"{write_tool} 没有登记对应的读工具"
@@ -57,7 +62,7 @@ def test_每个写工具都有对应的读工具(write_tool):
 
 def test_新增写工具必须想清楚怎么读():
     """防止有人加了写工具却忘了登记读工具。"""
-    missing = set(WRITE_TOOLS) - set(READ_FOR_WRITE)
+    missing = (set(WRITE_TOOLS) | set(LOCKED_WRITE_TOOLS)) - set(READ_FOR_WRITE)
     assert not missing, (
         f"这些写工具没登记读工具：{sorted(missing)}。"
         f"请先确认模型能不能读到它改的那个对象，再补进 READ_FOR_WRITE。"
@@ -65,7 +70,7 @@ def test_新增写工具必须想清楚怎么读():
 
 
 def test_登记表里没有多余的项():
-    extra = set(READ_FOR_WRITE) - set(WRITE_TOOLS)
+    extra = set(READ_FOR_WRITE) - set(WRITE_TOOLS) - set(LOCKED_WRITE_TOOLS)
     assert not extra, f"READ_FOR_WRITE 里有已经不存在的写工具：{sorted(extra)}"
 
 
@@ -163,3 +168,95 @@ def test_模型的每个字段都过得去_to_dict():
     back = Proposal.from_dict(dumped)
     assert back.danger == prop.danger
     assert back.tool == prop.tool
+
+
+# ── 确认卡片上的"目标"必须是准的 ──────────────────────────────────────────
+#
+# 确认卡片是这套系统里**唯一让人做决定的地方**。卡片上的目标写错了，
+# 人就是对着错误的信息点的批准——那比没有卡片更糟，因为他以为自己看过了。
+#
+# 这里踩过一次，而且是一次核对里同时暴露 4 个：
+#   delete_pvc            被显示成 Deployment/xxx（明明是 PVC）
+#   patch_hpa_target      显示成 Deployment/（名字是空的）
+#   patch_service_selector 显示成 Deployment/（空，它用的是 service 参数）
+#   patch_service_port     同上
+# 根因是 target_of 用 if 链 + 兜底，任何没被 if 命中的工具都被默默当成 Deployment。
+
+
+# 每个写工具一组"能真正跑通"的参数，用来驱动目标解析。
+# 故意**不**从 schema 自动生成：自动生成的参数只能证明"不报错"，
+# 证明不了"解析出来的目标是这个工具真正作用的那个对象"。
+TARGET_PARAMS: dict[str, dict] = {
+    "rollout_restart": {"namespace": "demo", "name": "api-gateway"},
+    "rollout_undo": {"namespace": "demo", "name": "api-gateway"},
+    "scale_workload": {"namespace": "demo", "name": "api-gateway", "replicas": 3},
+    "delete_pod": {"namespace": "demo", "pod": "api-gateway-0"},
+    "patch_resources": {"namespace": "demo", "name": "api-gateway"},
+    "patch_hpa": {"namespace": "demo", "hpa": "api-gateway"},
+    "patch_hpa_target": {"namespace": "demo", "hpa": "api-gateway", "target": "api-gateway"},
+    "cordon_node": {"node": "om-sandbox-worker"},
+    "uncordon_node": {"node": "om-sandbox-worker"},
+    "drain_node": {"node": "om-sandbox-worker", "namespace": "demo"},
+    "rollback_configmap": {"namespace": "demo", "name": "app-config"},
+    "patch_service_selector": {"namespace": "demo", "service": "order-service",
+                               "selector": {"app": "order-service"}},
+    "patch_service_port": {"namespace": "demo", "service": "order-service", "target_port": 8080},
+    "patch_probe": {"namespace": "demo", "name": "api-gateway", "port": 8080},
+    "patch_node_selector": {"namespace": "demo", "name": "api-gateway"},
+    "delete_pvc": {"namespace": "demo", "name": "scratch-migration-temp"},
+}
+
+# 明确期望的资源类型。**故意手写**，不是从代码里推出来的——
+# 从被测代码推出期望值，等于用同一份错误去验证自己。
+EXPECTED_KIND: dict[str, str] = {
+    "delete_pod": "Pod",
+    "delete_pvc": "PersistentVolumeClaim",
+    "rollback_configmap": "ConfigMap",
+    "patch_hpa": "HorizontalPodAutoscaler",
+    "patch_hpa_target": "HorizontalPodAutoscaler",
+    "patch_service_selector": "Service",
+    "patch_service_port": "Service",
+    "cordon_node": "Node",
+    "uncordon_node": "Node",
+    "drain_node": "Node",
+    "rollout_restart": "Deployment",
+    "rollout_undo": "Deployment",
+    "scale_workload": "Deployment",
+    "patch_resources": "Deployment",
+    "patch_probe": "Deployment",
+    "patch_node_selector": "Deployment",
+}
+
+
+def test_每个写工具的参数样例都齐():
+    """TARGET_PARAMS 自己也得被守着，否则下面那条测试会因为漏项而"静默通过"。"""
+    from omagent.tools import LOCKED_WRITE_TOOLS
+
+    missing = (set(WRITE_TOOLS) | set(LOCKED_WRITE_TOOLS)) - set(TARGET_PARAMS)
+    assert not missing, f"这些写工具没有目标解析的样例参数：{sorted(missing)}"
+
+
+@pytest.mark.parametrize("tool", (*WRITE_TOOLS, *LOCKED_WRITE_TOOLS))
+def test_确认卡片上的目标必须非空且类型正确(tool):
+    from omagent.agent import OpsAgent
+    from omagent.tools import LOCKED_SPECS
+
+    spec = TOOLS.get(tool) or LOCKED_SPECS[tool]
+    t = OpsAgent.target_of(spec, TARGET_PARAMS[tool])
+
+    assert t.name, (
+        f"{tool} 的确认卡片上**目标是空的**——运维只看到「{t.kind}/ 」，"
+        f"根本不知道这个动作会作用在谁身上"
+    )
+    assert t.kind == EXPECTED_KIND[tool], (
+        f"{tool} 的卡片把目标类型显示成 {t.kind}，应该是 {EXPECTED_KIND[tool]}"
+    )
+
+
+def test_节点级动作不带命名空间():
+    """节点是集群级对象，卡片上写"命名空间 demo 的节点"会让人以为只影响那个命名空间。"""
+    from omagent.agent import OpsAgent
+
+    for tool in ("cordon_node", "uncordon_node", "drain_node"):
+        t = OpsAgent.target_of(TOOLS[tool], TARGET_PARAMS[tool])
+        assert t.kind == "Node" and t.namespace == ""

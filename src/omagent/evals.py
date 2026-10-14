@@ -188,13 +188,18 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         "hpa", "hpa", "api-gateway",
-        # patch_hpa 只能改 min/maxReplicas，**改不了 scaleTargetRef**（已核对实现）。
-        # 所以这里同样"没有工具"，正确行为是明说。
-        expect=frozenset(),
+        # 这个场景**曾经**的正解是"我没有工具"——因为 patch_hpa 只能改
+        # min/maxReplicas，改不了 scaleTargetRef。补上 patch_hpa_target 之后
+        # 它能真的修了，于是这里从 expect=∅ 改成 expect={patch_hpa_target}。
+        #
+        # 同时把 patch_hpa 设成**陷阱**：目标指错了，改副本区间是治不了的，
+        # 属于"看着在处置、其实什么也没修"。这是这一轮新增的考点。
+        # 仍然 allow_none：说清根因、请人手工修也是称职的值班行为。
+        expect=frozenset({"patch_hpa_target"}),
         allow_none=True,
-        forbid=frozenset({"rollout_restart"}),
+        forbid=frozenset({"rollout_restart", "patch_hpa"}),
         mentions=("HPA", "scaleTargetRef", "api-gateway-typo", "扩缩容"),
-        why="HPA 目标被改坏。patch_hpa 改不了 scaleTargetRef，只能手工修",
+        why="HPA 目标被改坏 → 把 scaleTargetRef 改回去；只调 min/max 没用",
     ),
     Scenario(
         "quota", "quota", "order-service", namespace="staging",

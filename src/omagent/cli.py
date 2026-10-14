@@ -17,7 +17,15 @@ import sys
 from pathlib import Path
 
 from .config import ROOT, ensure_local_bypass, load_env_file, llm_status
-from .tools import FORBIDDEN, TOOLS
+from .tools import (
+    FORBIDDEN,
+    PERMANENTLY_FORBIDDEN,
+    TOOLS,
+    UNLOCKABLE,
+    forbidden_now,
+    unlock_tool,
+    unlocked_tools,
+)
 
 DEFAULT_USERS = ROOT / "var" / "users.json"
 
@@ -27,6 +35,27 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     load_env_file()
     ensure_local_bypass()
+
+    # 解锁禁区工具。**在 serve 之前做完**，这样工具清单、审计回显、
+    # 前端面板看到的都是同一份状态。
+    # 写错了直接退出（unlock_tool 会抛）——不做静默忽略：参数敲错却照常起来，
+    # 运维会以为自己已经打开了，实际没有。
+    unlocked: list[str] = []
+    for name in getattr(args, "allow_tool", None) or []:
+        try:
+            unlock_tool(name)
+        except ValueError as exc:
+            raise SystemExit(f"✗ --allow-tool {name}：{exc}")
+        unlocked.append(name)
+    if unlocked:
+        # 必须在启动时**大声回显**：解锁禁区工具是这台机器上最值得被记住的
+        # 一件配置，不能只存在于某个人的命令行历史里。
+        print(f"⚠️  已解锁禁区工具：{'、'.join(unlocked)}")
+        for n in unlocked:
+            print(f"    - {n}: {UNLOCKABLE.get(n, '')}")
+        print("    这些动作默认不可用，现在模型可以提议它们；"
+              "仍需要人批准，且危险档位要求手输目标名字。")
+
     serve(
         host=args.host,
         port=args.port,
@@ -43,6 +72,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         patrol_interval=args.patrol_interval,
         patrol_cooldown=args.patrol_cooldown,
         providers_factory=lambda k8s: _build_providers(k8s, args),
+        unlocked=tuple(unlocked),
     )
     return 0
 
@@ -224,6 +254,7 @@ def cmd_users(args: argparse.Namespace) -> int:
 def cmd_tools(_: argparse.Namespace) -> int:
     readonly = [t for t in TOOLS.values() if not t.mutating]
     write = [t for t in TOOLS.values() if t.mutating]
+    opened = unlocked_tools()
 
     print(f"\n只读工具（{len(readonly)} 个）—— 自动执行，不需要确认\n")
     for t in readonly:
@@ -231,9 +262,20 @@ def cmd_tools(_: argparse.Namespace) -> int:
     print(f"\n写工具（{len(write)} 个）—— 必须人工批准后才会执行\n")
     for t in write:
         print(f"  {t.name:<20} {t.summary}")
-    print(f"\n禁止动作（{len(FORBIDDEN)} 个）—— 不在工具清单里，模型看不见也调不到\n")
-    for name, why in FORBIDDEN.items():
-        print(f"  {name:<20} {why}")
+    now = forbidden_now()
+    print(f"\n禁止动作（{len(now)} 个）—— 不在工具清单里，模型看不见也调不到\n")
+    for name, why in now.items():
+        tag = "（永久禁止）" if name in PERMANENTLY_FORBIDDEN else ""
+        print(f"  {name:<20} {why}{tag}")
+
+    if opened:
+        print(f"\n⚠️  已解锁（{len(opened)} 个）—— 本进程用 --allow-tool 显式打开了\n")
+        for spec in opened.values():
+            print(f"  {spec.name:<20} danger={spec.danger}  {spec.summary}")
+        print("\n  这些动作**仍然需要人批准**，且 severe 档位要求手输目标名字。")
+    else:
+        print(f"\n可解锁但当前锁着：{'、'.join(sorted(UNLOCKABLE))}"
+              f"（用 --allow-tool <名字> 打开，须在 serve 启动时指定）")
     print()
     return 0
 
@@ -514,6 +556,24 @@ def _add_provider_args(parser) -> None:
                         help="把某个外部工具加入只读白名单（**不写就不导入**），可重复")
 
 
+def _add_unlock_args(parser) -> None:
+    """`--allow-tool` 只挂在 `serve` 上，**不挂给 `mcp`**。
+
+    它原来被 `_add_provider_args()` 顺手挂到了 serve 和 mcp 两个子命令上，
+    而 `cmd_mcp()` 根本不调用 `unlock_tool()`——于是 `omagent mcp --allow-tool delete_pvc`
+    会被**静默接受、毫无效果**：参数写错了却照常起来，人还以为打开了。
+    这正好违反本项目自己的规矩（启动参数写错就直接退出，不静默忽略）。
+
+    而且 MCP server 只暴露只读工具，写操作本来就不会上去，
+    在这儿解锁没有任何意义。所以在源头上去掉，而不是在 cmd_mcp 里补一句报错。
+    """
+    parser.add_argument("--allow-tool", action="append", metavar="工具名", default=[],
+                        help="解锁一个默认锁着的禁区工具（可重复）。当前可解锁："
+                             + "、".join(sorted(UNLOCKABLE))
+                             + "。**不写就永远锁着**；每个都要单独指定，"
+                               "启动时会回显、并写进审计。")
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     """以 MCP server 方式跑（stdio），把只读工具暴露给任意 MCP 客户端。
 
@@ -571,6 +631,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-bootstrap", action="store_true",
                    help="用户库不存在时不自动建 admin 账号，直接报错退出")
     _add_provider_args(s)
+    _add_unlock_args(s)
     s.add_argument("--patrol-interval", type=float, default=0.0,
                    help="巡检间隔秒数（0=不启用）。启用后会主动扫集群、自动起会话调查")
     s.add_argument("--patrol-cooldown", type=float, default=1800.0,

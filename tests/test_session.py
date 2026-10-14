@@ -40,6 +40,26 @@ def types(sess: ChatSession) -> list[str]:
     return [e.type for e in sess.events]
 
 
+def assert_tool_calls_paired(msgs) -> None:
+    """钉死一条 **协议不变量**：带 ``tool_calls`` 的 assistant 消息后面，
+    必须**紧接着**跟满对应数量的 ``tool`` 结果，中间不能夹任何别的角色。
+
+    OpenAI 协议如此，违反就是 400（insufficient tool messages following
+    tool_calls message）。这条不变量被踩过两次，所以单独抽出来：
+      1. 退化循环护栏就地插 system（修：延后到本回合结果落完再插）
+      2. 同回合剩余调用没落盘，重启后丢结果（修：pending_calls 一起存）
+    """
+    for i, m in enumerate(msgs):
+        tcs = m.get("tool_calls")
+        if not tcs:
+            continue
+        following = [x.get("role") for x in msgs[i + 1:i + 1 + len(tcs)]]
+        assert following == ["tool"] * len(tcs), (
+            f"assistant 带了 {len(tcs)} 个 tool_calls，"
+            f"但紧跟着的是 {following} —— 中间被插了别的角色，API 会报 400"
+        )
+
+
 # ── 只读：自动执行 ────────────────────────────────────────────────────────
 
 
@@ -435,15 +455,7 @@ def test_护栏提示不会插在tool结果中间(env):
     run(sess)
 
     msgs = sess.messages
-    for i, m in enumerate(msgs):
-        tcs = m.get("tool_calls")
-        if not tcs:
-            continue
-        following = [x.get("role") for x in msgs[i + 1:i + 1 + len(tcs)]]
-        assert following == ["tool"] * len(tcs), (
-            f"assistant 带了 {len(tcs)} 个 tool_calls，"
-            f"但紧跟着的是 {following} —— 中间被插了别的角色，API 会报 400"
-        )
+    assert_tool_calls_paired(msgs)
 
     # 位置虽然推迟了，但护栏最终确实注入了（不能因为修位置就把它弄丢）
     assert any(
@@ -579,6 +591,88 @@ def test_重放历史时待批状态是空的(env):
     # 但事件流里那张卡片还在——它是记录，不是待办
     kinds = [e.type for e in revived.events]
     assert "approval" in kinds and "decision" in kinds
+
+
+# ── 重启：本回合剩余的调用不能丢 ──────────────────────────────────────────
+#
+# 模型一个回合可以并发好几个工具调用。`_handle_call` 一旦碰到写操作就
+# 挂起等人批准，**排在后面的调用还没执行**。
+#
+# 如果这些没执行的调用不落盘，服务重启后它们就永远消失了：
+# assistant 消息上挂着 3 个 tool_call，却只有 1 条 tool 结果，
+# 下次调模型直接 400。崩得很像"模型服务不行"，最容易被误判成外部问题。
+
+
+def test_待批准时重启_同回合剩余调用不丢(env):
+    agent, _, _ = env
+    # 一个回合里：先读、再提写操作（在此挂起）、后面还排着一个读
+    sess = build(env, [
+        reply_tools(
+            ("get_pods", {"namespace": "demo"}),
+            ("rollout_restart", {"namespace": "demo", "name": "api-gateway",
+                                 "rationale": "OOM 重启"}),
+            ("get_nodes", {}),
+        ),
+        reply_text("好了"),
+    ])
+    sess.send("api 一直在重启")
+    run(sess)
+
+    assert sess.status == "awaiting_approval"
+    # 「先读」执行了，「写」挂起了，「后读」还排着
+    assert len(sess._pending_calls) == 1, "同回合剩余的调用应该还排在队列里"
+
+    blob = json.loads(json.dumps(sess.to_dict(), default=str))
+    assert len(blob["pending_calls"]) == 1, "剩余的调用必须一起落盘"
+
+    revived = ChatSession.from_dict("s-x", blob, agent, ScriptedLLM([reply_text("好了")]))
+    assert revived.status == "awaiting_approval"
+    assert len(revived._pending_calls) == 1, "恢复后必须还在，否则那 3 个 tool_call 永远补不齐"
+
+    # 批准之后续跑：补的 tool 结果必须仍然紧跟着 assistant
+    revived.resolve_approval(revived.pending.proposal.proposal_id, True)
+    run(revived)
+    assert_tool_calls_paired(revived.messages)
+
+
+def test_中断的回合重启后历史会被补齐(env):
+    """上一轮查到一半被重启打断：那些没执行的调用要补一条"没执行完"的结果。
+
+    不重放它们——集群状态可能早变了，把旧的读取结果补回去是误导。
+    但**必须补**，否则历史格式不合法，用户重启后发的第一句话就换来一个 400。
+    """
+    agent, k8s, _ = env
+    sess = build(env, [
+        reply_tools(
+            ("get_pods", {"namespace": "demo"}),
+            ("get_logs", {"namespace": "demo", "pod": "api-1"}),
+        ),
+        reply_text("好了"),
+    ])
+    sess.send("查一下")
+    run(sess)
+
+    # 手工伪造"查到一半被打断"：把最后一个 tool 结果摘掉，状态退回 thinking
+    blob = json.loads(json.dumps(sess.to_dict(), default=str))
+    blob["status"] = "thinking"
+    blob["pending_calls"] = [{"id": "call_1", "name": "get_logs",
+                              "arguments": {"namespace": "demo", "pod": "api-1"}}]
+    blob["messages"] = [m for m in blob["messages"]
+                        if not (m.get("role") == "tool" and m.get("tool_call_id") == "call_1")]
+
+    before = len(k8s.calls) if hasattr(k8s, "calls") else None
+    revived = ChatSession.from_dict("s-y", blob, agent, ScriptedLLM([reply_text("好了")]))
+
+    assert revived.status == "idle"
+    assert revived._pending_calls == [], "被打断的调用不该留着重放"
+    # 历史被补齐 → 格式合法
+    assert_tool_calls_paired(revived.messages)
+    # 补的那条要说清楚是"没执行完"，不能伪装成真实读数
+    texts = [m.get("content", "") for m in revived.messages if m.get("role") == "tool"]
+    assert any("重启" in t and "没有执行完" in t for t in texts), \
+        "补齐的结果必须写明是中断导致的，不能冒充真实读数"
+    if before is not None:
+        assert len(k8s.calls) == before, "被打断的读操作不该被重放"
 
 
 # ---------------------------------------------------------------------------

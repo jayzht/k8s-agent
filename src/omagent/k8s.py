@@ -960,6 +960,9 @@ class K8sClient:
             return self._scale(ns, name, params.get("kind", "deployment"), int(params["replicas"]), dry)
         if tool == "delete_pod":
             return self._delete_pod(ns, params["pod"], dry)
+        if tool == "delete_pvc":
+            # 默认锁着：能走到这里说明启动时用 --allow-tool 显式解锁过。
+            return self._delete_pvc(ns, name, dry)
         if tool == "cordon_node":
             return self._cordon(params["node"], True, dry)
         if tool == "uncordon_node":
@@ -978,6 +981,8 @@ class K8sClient:
             return self._patch_node_selector(ns, name, params.get("kind", "deployment"), params, dry)
         if tool == "patch_hpa":
             return self._patch_hpa(ns, params["hpa"], params, dry)
+        if tool == "patch_hpa_target":
+            return self._patch_hpa_target(ns, params["hpa"], params, dry)
         if tool == "rollback_configmap":
             data = params.get("data")
             if not isinstance(data, dict) or not data:
@@ -1103,6 +1108,29 @@ class K8sClient:
         except ApiException as exc:
             raise ActionRejected(f"删除 Pod 被拒绝: {exc.reason}") from exc
         return f"已删除 Pod {pod}（控制器将自动重建）"
+
+    def _delete_pvc(self, ns: str, name: str, dry: str | None) -> str:
+        """删除一个 PVC。**只有 ``--allow-tool delete_pvc`` 解锁之后才可能走到这里。**
+
+        ⚠️ 这个动作的 dry-run **不提供任何保护**，必须写清楚免得有人误以为
+        干跑一下就有安全感：服务端对 delete 的 dry-run 只校验请求格式，
+        不会告诉你"这个 PV 会被回收、数据没了"，也不会拦"PVC 正被 Pod 使用"。
+        （实测过：``delete pvc --dry-run=server`` 对这些情况照样返回成功。）
+
+        所以它的安全边界**不在 dry-run 上**，而在这三处：
+        1. 默认锁着，必须启动时 ``--allow-tool`` 显式解锁；
+        2. ``danger="severe"`` → 前端要求**手输 PVC 名字**才能批准；
+        3. 走同一条审批 + 审计链，谁批的、什么时候批的都留痕。
+        """
+        if not name:
+            raise ActionRejected("delete_pvc 需要指定 name")
+        try:
+            self.core.delete_namespaced_persistent_volume_claim(name, ns, dry_run=dry)
+        except ApiException as exc:
+            if exc.status == 404:
+                raise ActionRejected(f"命名空间 {ns} 下没有 PVC/{name}") from exc
+            raise ActionRejected(f"删除 PVC 被拒绝: {exc.reason}") from exc
+        return f"已删除 PVC/{name}（命名空间 {ns}）——这是不可逆操作"
 
     def _cordon(self, node: str, unschedulable: bool, dry: str | None) -> str:
         body = {"spec": {"unschedulable": unschedulable}}
@@ -1233,6 +1261,45 @@ class K8sClient:
         except ApiException as exc:
             raise ActionRejected(f"patch HPA 被拒绝: {exc.reason}") from exc
         return f"已更新 HPA/{name}: {body['spec']}"
+
+    def _patch_hpa_target(self, ns: str, name: str, params: dict[str, Any],
+                          dry: str | None) -> str:
+        """改 HPA 的 ``scaleTargetRef``——也就是"它到底在给谁扩缩容"。
+
+        为什么要有这个工具：``patch_hpa`` 只能改 min/maxReplicas。而
+        ``scaleTargetRef`` 一旦被指到一个不存在的名字，HPA 会一直报
+        ``FailedGetScale``，**副本数完全不动，min/max 改多少次都没用**——
+        改区间治不了改坏的目标。此前这个场景的正解只能是
+        "我没有工具，请你手工执行"。
+
+        ⚠️ 这是本项目里**危险级别最高的一类改动**：指错对象就等于让 HPA
+        去扩缩容另一个工作负载。三道约束：
+        - 必须先读（``get_hpa``）确认目标真的坏了——写工具都有对应读工具；
+        - **整块替换** ``scaleTargetRef``，不做局部 patch（留一半旧值更危险）；
+        - server-side dry-run 会真的让 API server 校验这个目标能不能扩缩，
+          这点和 delete 不同（delete 的 dry-run 不校验任何东西）。
+        """
+        target = str(params.get("target") or "").strip()
+        if not target:
+            raise ActionRejected("target 不能为空——那会让 HPA 失去扩缩容对象")
+        kind = str(params.get("kind") or "Deployment").strip() or "Deployment"
+        api_version = str(params.get("api_version") or "apps/v1").strip() or "apps/v1"
+
+        body = {
+            "spec": {
+                "scaleTargetRef": {
+                    "apiVersion": api_version,
+                    "kind": kind,
+                    "name": target,
+                }
+            }
+        }
+        try:
+            self.autoscaling_v2.patch_namespaced_horizontal_pod_autoscaler(
+                name, ns, body, dry_run=dry)
+        except ApiException as exc:
+            raise ActionRejected(f"改 HPA 扩缩容目标被拒绝: {exc.reason}") from exc
+        return f"已把 HPA/{name} 的扩缩容目标改成 {kind}/{target}"
 
     # ------------------------------------------------- T0 只读诊断（真正可执行）
     #

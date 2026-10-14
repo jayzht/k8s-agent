@@ -221,6 +221,108 @@ def test_approval_card_frozen(browser, user: str, password: str, sid: str) -> No
     pg.close()
 
 
+def test_severe_gate(browser, user: str, password: str, sid: str) -> None:
+    """回归：`severe` 档位的卡片必须**真的绑住批准按钮**，直到目标名字被原样输入。
+
+    为什么值得单列一条浏览器级测试：`severe` 从加进来到现在，**没有任何工具用过它**，
+    所以整条前端分支（危险横幅 + 手输确认 + 按钮 disabled）从来没被真正走过。
+    而它恰好是"解锁禁区工具"这件事**唯一**的额外防线——
+    服务端已经有审批、白名单、审计，`severe` 多出来的就是这道**摩擦**。
+
+    被动警告会脱敏（红色横幅点几次就顺手了），所以这里验的不是"有没有警告"，
+    而是"**没输入对就点不动**"。
+    """
+    print("\n[severe 手输确认]")
+    pg = _new_page(browser)
+    pg.goto(BASE, wait_until="networkidle")
+    pg.wait_for_selector("#login-mask:not([hidden])", timeout=15000)
+    pg.fill("#login-user", user)
+    pg.fill("#login-pass", password)
+    pg.click("#login-btn")
+    pg.wait_for_selector(".wl", timeout=30000)
+    pg.evaluate(f"localStorage.setItem('om_sid', {sid!r})")
+    pg.reload(wait_until="networkidle")
+    pg.wait_for_selector(".approval", timeout=40000)
+    pg.wait_for_timeout(1500)
+
+    card = pg.query_selector(".approval")
+    head = card.query_selector(".approval-head")
+    head_cls = head.get_attribute("class") or ""
+    check("卡片头标记为 severe", "severe" in head_cls, head_cls)
+    check("卡片头写明高风险不可逆", "高风险" in head.inner_text(), head.inner_text())
+
+    banner = card.query_selector(".approval-danger.severe")
+    check("有 severe 级别的危险横幅", banner is not None)
+
+    text = card.inner_text()
+    check("卡片标出目标是 PVC",
+          "PersistentVolumeClaim" in text or "PVC" in text,
+          [ln for ln in text.splitlines() if "scratch" in ln][:2])
+
+    gate = card.query_selector(".danger-confirm")
+    check("出现了手输确认框", gate is not None)
+    if gate is None:
+        pg.close()
+        return
+
+    btn = card.query_selector(".btn-approve")
+    check("未输入时批准按钮是禁用的", btn.is_disabled())
+
+    # 输个错的：必须**仍然**点不动。这一步是这条测试的核心。
+    gate.fill("随便乱输")
+    pg.wait_for_timeout(300)
+    check("输错之后批准按钮仍然禁用", btn.is_disabled(), f"value={gate.input_value()!r}")
+
+    # 输对：解锁
+    expect = "scratch-migration-temp"
+    gate.fill(expect)
+    pg.wait_for_timeout(300)
+    check("输对之后批准按钮解锁", not btn.is_disabled(), f"value={gate.input_value()!r}")
+
+    # 再改回错的：必须重新锁上（不能"解锁一次就永久解锁"）
+    gate.fill(expect + "x")
+    pg.wait_for_timeout(300)
+    check("改回错的会重新锁上", btn.is_disabled())
+    pg.close()
+
+
+def make_severe_session(user: str, password: str) -> str:
+    """造一个待批准的 `delete_pvc`（severe 档位）会话。
+
+    **要求服务是用 `--allow-tool delete_pvc` 起的**——默认锁着时模型看不见
+    这个工具，也就永远提不出卡片。没解锁时这里会明确报出来，
+    而不是让人对着"超时"干猜。
+    """
+    cookie = login(user, password)
+    _, status = http("GET", "/api/status", cookie=cookie)
+    names = {t["name"] for t in (status.get("tools") or [])}
+    if "delete_pvc" not in names:
+        print("  ✗ 服务没有解锁 delete_pvc（要用 --allow-tool delete_pvc 启动）")
+        return ""
+
+    code, snap = http("POST", "/api/session", {"namespace": "demo"}, cookie=cookie)
+    sid = snap.get("session_id", "")
+    http("POST", "/api/chat",
+         {"session_id": sid,
+          "text": "demo 里有个 PVC 叫 scratch-migration-temp，是上次一次性数据迁移留下的"
+                  "草稿盘，迁移早就做完了，现在没有任何工作负载引用它。"
+                  "请给我一张删除它的变更卡片。"},
+         cookie=cookie)
+
+    since = 0
+    for _ in range(120):
+        _, s = http("GET", f"/api/poll?session_id={sid}&since={since}", cookie=cookie)
+        since = s.get("last_seq", since)
+        if s.get("status") == "awaiting_approval":
+            return sid
+        if s.get("status") in ("idle", "error"):
+            print(f"  ✗ 会话结束了（{s.get('status')}），模型没提卡片")
+            return ""
+        time.sleep(3)
+    print("  ✗ 等卡片超时")
+    return ""
+
+
 def test_wall_fits(browser, user: str, password: str) -> None:
     """回归：大屏在任何分辨率都不能滚、更不能裁掉节点。
 
@@ -397,6 +499,9 @@ def main() -> int:
     ap.add_argument("--password", default="ops-pass-2026")
     ap.add_argument("--quick", action="store_true", help="跳过要调模型的审批流程检查")
     ap.add_argument("--sid", default="", help="指定一个已有裁决记录的会话 id")
+    ap.add_argument("--sid-severe", default="",
+                    help="指定一个待批准的 severe（delete_pvc）会话 id；"
+                         "不给且命令行里出现 --allow-tool 时会自动造一个")
     args = ap.parse_args()
 
     try:
@@ -435,6 +540,18 @@ def main() -> int:
             test_injection_alert_rendered(browser, args.user, args.password, inj)
         else:
             print("\n[注入告警] 跳过（没有含 injection 事件的会话）")
+
+        # severe 门禁：需要服务用 --allow-tool delete_pvc 起。
+        # 没解锁就跳过（而不是失败）——那只是这台服务没开这个功能，
+        # 不是前端坏了。
+        if args.sid_severe:
+            test_severe_gate(browser, args.user, args.password, args.sid_severe)
+        elif not args.quick and "--allow-tool" in " ".join(sys.argv):
+            sid_sv = make_severe_session(args.user, args.password)
+            if sid_sv:
+                test_severe_gate(browser, args.user, args.password, sid_sv)
+        else:
+            print("\n[severe 手输确认] 跳过（没给 --sid-severe，且没检测到 --allow-tool）")
         browser.close()
 
     print("\n" + "=" * 66)

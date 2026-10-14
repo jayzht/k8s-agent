@@ -48,7 +48,7 @@ from .k8s import K8sClient, K8sUnavailable
 from .llm import LLMClient
 from .mcp_client import McpServerStore, provider_from_entry
 from .session import ChatSession
-from .tools import FORBIDDEN
+from .tools import FORBIDDEN, forbidden_now
 
 WEB_DIR = ROOT / "web"
 
@@ -531,7 +531,9 @@ class App:
             # 报了一堆原因，人在界面上却只看到"没有工具"。
             "providers": self.agent.providers.status(),
             "patrol": self.patrol.status() if self.patrol else {"enabled": False},
-            "forbidden": FORBIDDEN,
+            # 显示"**现在**还动不了什么"——已解锁的要从这里消失，
+            # 否则它会同时出现在工具清单里，运维没法判断到底能不能用。
+            "forbidden": forbidden_now(),
             "write_namespaces": list(self.agent.write_namespaces),
             "scenarios": self.scenario_menu(),
         }
@@ -1071,11 +1073,23 @@ def serve(
     mcp_store=None,
     patrol_interval: float = 0.0,
     patrol_cooldown: float = 1800.0,
+    unlocked: tuple[str, ...] = (),
 ) -> None:
     from .agent import WRITE_NAMESPACES
 
     k8s = K8sClient(kubeconfig=kubeconfig)
     audit = AuditLog(audit_path or (ROOT / "var" / "audit.jsonl"))
+
+    # 解锁禁区工具必须**落审计**，不能只在启动日志里 print 一下就完了。
+    # 启动日志会随着终端关闭消失、也不跟着会话走；而"这台机器上到底开过哪些
+    # 禁区动作"恰恰是最该被回溯的一件事——出了事要能回答"是谁、什么时候开的"。
+    # 记一条 `tools_unlocked`，跟审批、执行同一条哈希链。
+    if unlocked:
+        audit.append("tools_unlocked", {
+            "operator": operator,
+            "tools": list(unlocked),
+            "note": "启动时通过 --allow-tool 显式解锁；这些动作仍需人工批准",
+        })
     agent = OpsAgent(
         k8s, audit, operator=operator,
         write_namespaces=write_namespaces or WRITE_NAMESPACES,
