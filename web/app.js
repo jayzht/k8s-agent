@@ -468,6 +468,23 @@ function addApproval(ev) {
   if (imp.stateful) risks.push('这是有状态服务，滚动过程比无状态服务慢。');
   if (imp.notes && imp.notes.length) risks.push(...imp.notes);
 
+  // 危险级别（服务端从工具表带过来）。
+  //
+  // 为什么不能只靠一条红色横幅：**被动警告会脱敏**——浏览器"此网站不安全"、
+  // Windows UAC、SSL 证书警告，全都是被点顺手的。
+  // 真正拦得住的是**摩擦**：让人做一件肌肉记忆做不到的事。
+  // 所以 severe 要求**手输目标名字**才能点批准（GitHub 删仓库同款做法）。
+  const danger = p.danger || 'normal';
+  const dangerNote = danger === 'caution'
+    ? `<div class="approval-danger caution">⚠️ 这个动作<b>不可撤销</b>：
+         服务端干跑对删除类操作**给不了保护**（它只检查请求格式，不检查后果）。
+         执行后只能靠控制器或人工恢复。</div>`
+    : danger === 'severe'
+      ? `<div class="approval-danger severe">⛔ <b>高风险且不可逆</b>：
+           这个动作可能造成数据丢失，或突破现有的授权边界。
+           <b>请确认你了解它到底会改什么</b>——下面要求你手输目标名字才放行。</div>`
+      : '';
+
   const dry = p.dry_run_ok === true
     ? '<span class="tag good">已通过</span>'
     : p.dry_run_ok === false
@@ -484,7 +501,8 @@ function addApproval(ev) {
     ? `<div class="approval-ttl">方案有效期 <b id="ttl-${esc(p.proposal_id)}">${Math.floor(p.expires_in / 60)}:${String(p.expires_in % 60).padStart(2, '0')}</b> —— 过期后批准也不会执行，需要重新诊断</div>`
     : '';
   d.innerHTML = `
-    <div class="approval-head">⚠️ 需要你确认这个操作</div>
+    <div class="approval-head${danger === 'severe' ? ' severe' : ''}">${
+      danger === 'severe' ? '⛔ 高风险操作 · 不可逆' : '⚠️ 需要你确认这个操作'}</div>
     <div class="approval-body">
       <div class="approval-what">${esc(p.display_command || `${p.tool}`)}</div>
       ${p.rationale ? `<div class="approval-why">${md(p.rationale)}</div>` : ''}
@@ -494,6 +512,7 @@ function addApproval(ev) {
         <dt>服务端干跑</dt><dd>${dry} <span class="muted small">${esc((p.dry_run_output || '').slice(0, 160))}</span></dd>
         <dt>回滚方式</dt><dd>${esc(p.rollback || '未提供')}</dd>
       </dl>
+      ${dangerNote}
       ${risks.length ? `<div class="approval-warn">${risks.map(esc).join('<br>')}</div>` : ''}
       ${ttlNote}
     </div>
@@ -509,6 +528,22 @@ function addApproval(ev) {
 
   const entry = { el: d, timer: null };
   state.approvalCards[p.proposal_id] = entry;
+
+  // severe：绑住批准按钮，直到目标名字被原样输进去。
+  // 这一步刻意做成"做不到就点不了"——横幅能被无视，这个不行。
+  if (danger === 'severe' && mayApprove) {
+    const btn = d.querySelector('.btn-approve');
+    const expect = String(p.target?.name || '');
+    const gate = document.createElement('input');
+    gate.className = 'danger-confirm';
+    gate.placeholder = `输入 ${expect} 以解锁「批准执行」`;
+    gate.autocomplete = 'off';
+    btn.disabled = true;
+    btn.before(gate);
+    gate.addEventListener('input', () => {
+      btn.disabled = gate.value.trim() !== expect;
+    });
+  }
 
   // 有效期倒计时。到点自动禁用按钮——不然人点了才发现过期，
   // 白等一轮还以为是系统坏了。

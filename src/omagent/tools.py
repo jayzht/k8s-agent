@@ -35,6 +35,18 @@ class ToolSpec:
     mutating: bool
     summary: str  # 一句话人话说明，给操作员看
     schema: dict[str, Any] = field(default_factory=dict)
+    # 危险级别：决定审批卡片长什么样，以及**要不要额外的摩擦**。
+    #
+    #   "normal"  —— 可逆、单个对象。卡片照常
+    #   "caution" —— 不可逆（虽然能被控制器/人工恢复）。卡片加醒目警告
+    #   "severe"  —— 不可逆且可能丢数据，或突破授权边界。
+    #                **必须手输目标名字才能批准**——见下面为什么
+    #
+    # 为什么 severe 不能只是一条红色横幅：**被动警告会脱敏**。
+    # 浏览器"此网站不安全"、Windows UAC、SSL 证书警告，全都是被点顺手的。
+    # 真正拦得住的是**摩擦**：让人做一件肌肉记忆做不到的事。
+    # （GitHub 删仓库、改 package 可见性都是让你手输名字——这是同一个道理。）
+    danger: str = "normal"
     # 这次操作是否受"写操作命名空间白名单"约束。
     #
     # **默认 True（fail closed）**：新增的工具默认要过白名单，除非它显式说明
@@ -198,6 +210,9 @@ _WRITE: list[ToolSpec] = [
     ToolSpec(
         "delete_pod", True, "删除单个 Pod 触发重建（比重启更快，但会短暂少一个实例）",
         _wobj({"namespace": _NS, "pod": {"type": "string"}}, ["namespace", "pod"]),
+        # 不可逆：dry-run 对删除无效（实测 delete --dry-run=server 会通过），
+        # 所以卡片的措辞要更硬，别让人以为还能撤销。
+        danger="caution",
     ),
     ToolSpec(
         "patch_resources", True, "调整容器的 requests/limits（改内存上限用这个）",
@@ -241,6 +256,8 @@ _WRITE: list[ToolSpec] = [
             ["node"],
         ),
         namespace_scoped=False,
+        # 会驱逐节点上**所有** Pod（除非 PDB 拦住），影响面比删一个 Pod 大得多。
+        danger="caution",
     ),
     ToolSpec(
         "rollback_configmap", True, "把 ConfigMap 回滚到指定内容",

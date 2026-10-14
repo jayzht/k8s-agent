@@ -121,3 +121,40 @@ def test_案例检索是只读工具():
 
     assert "search_cases" in TOOLS
     assert TOOLS["search_cases"].mutating is False
+
+
+# ---------------------------------------------------------------------------
+# 序列化白名单：加了字段别忘了让它过河
+#
+# 这个坑在同一个项目里踩了三次（HTTP 头、provider tool、这里的 danger）：
+# 给 dataclass 加了字段，但 hand-written 的 to_dict() 是**显式列举**的，
+# 新字段悄悄丢在路上——而且不报错。
+# 所以用一个通用断言把这条钉死，以后加字段会自动被发现。
+# ---------------------------------------------------------------------------
+
+
+def test_模型的每个字段都过得去_to_dict():
+    """加了字段别忘了让它过河。
+
+    这个坑在同一个项目里踩了三次（HTTP 头、provider tool、这里的 danger）：
+    给 dataclass 加了字段，但 hand-written 的 to_dict() 是**显式列举**的，
+    新字段悄悄丢在路上——**而且不报错**。
+
+    最典型的后果：审批卡片拿不到 danger，高风险操作长得和普通操作一模一样。
+    """
+    import dataclasses
+    from omagent.models import Proposal, Target
+
+    prop = Proposal(tool="rollout_restart", params={},
+                    target=Target(kind="Deployment", namespace="demo", name="x"))
+    dumped = prop.to_dict()
+    for f in dataclasses.fields(Proposal):
+        assert f.name in dumped, (
+            f"Proposal.{f.name} 不在 to_dict() 里——"
+            f"hand-written 的序列化白名单漏了新字段，前端会拿不到它"
+        )
+
+    # 反向也要能回来
+    back = Proposal.from_dict(dumped)
+    assert back.danger == prop.danger
+    assert back.tool == prop.tool

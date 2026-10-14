@@ -525,3 +525,21 @@ select, .ghost {
 .mcp-tool input { margin-top: 3px; flex: none; }
 .mcp-tool code { color: #9dc0ff; }
 button.small { font-size: 11px; padding: 3px 8px; margin-left: auto; }
+
+/* ── 危险操作的卡片样式 ─────────────────────────────────────
+   设计前提：**被动警告会脱敏**。所以这里做两件事——
+   红的更红（caution/severe 分层），以及 severe 要求手输目标名字。
+   后者才是真正拦得住的那个：横幅能被无视，摩擦不行。 */
+.approval-head.severe { background: #3a1416; border-bottom-color: #6b2024; color: #ff9b94; }
+.approval-danger {
+  margin-top: 11px; padding: 9px 11px; border-radius: 6px; font-size: 12.5px;
+  line-height: 1.6;
+}
+.approval-danger.caution { background: #2a2014; border: 1px solid #5c4525; color: #f0c89c; }
+.approval-danger.severe  { background: #2a1214; border: 1px solid #6b2024; color: #ffb3ad; }
+.danger-confirm {
+  width: 100%; margin-bottom: 8px; padding: 8px 10px; border-radius: 6px;
+  background: #1a1214; border: 1px solid #6b2024; color: var(--text);
+  font-family: var(--mono); font-size: 12px;
+}
+.danger-confirm:focus { outline: none; border-color: #9c3036; }

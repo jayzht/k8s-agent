@@ -110,6 +110,9 @@ class Proposal:
     dry_run_ok: bool | None = None
     dry_run_output: str = ""
     rollback: str = ""
+    # 危险级别，从工具表带过来。决定审批卡片要不要额外警告、
+    # 以及要不要**手输目标名字**才能批准（severe 才要）。
+    danger: str = "normal"
     proposal_id: str = field(default_factory=lambda: new_id("prop-"))
     # 提方案那一刻算出来的症状签名。执行成功后用它把这条件记进案例库——
     # 记的是"当时看到的症状"，不是执行完之后的（执行完症状就没了）。
@@ -136,6 +139,9 @@ class Proposal:
             "dry_run_ok": self.dry_run_ok,
             "dry_run_output": self.dry_run_output,
             "rollback": self.rollback,
+            # 危险级别要跟着走到卡片上——漏了它前端就拿不到，
+            # 高风险的卡片会长得和普通卡片一样（这个坑真踩过）。
+            "danger": self.danger,
             "display_command": self.display_command,
             "signature": self.signature,
         }
@@ -157,6 +163,7 @@ class Proposal:
             dry_run_ok=d.get("dry_run_ok"),
             dry_run_output=d.get("dry_run_output", ""),
             rollback=d.get("rollback", ""),
+            danger=d.get("danger", "normal"),
             proposal_id=d.get("proposal_id") or new_id("prop-"),
             signature=list(d.get("signature") or []),
         )

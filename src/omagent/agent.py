@@ -199,6 +199,7 @@ class OpsAgent:
             target=self.target_of(spec, clean),
             rationale=stated or rationale or "（模型未说明理由）",
             rollback=rollback or self._default_rollback(tool),
+            danger=getattr(spec, "danger", "normal"),
         )
         prop.impact = self._analyse(spec, clean, prop.target)
         # 症状签名要在**提方案这一刻**算：执行成功之后症状就消失了，
