@@ -115,11 +115,13 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         "pending", "pending", "search-service",
-        # 实测：**没有任何工具能删掉一个新增的 nodeSelector**。
-        # rollout_undo 用的是 merge patch，而 merge patch 删不掉 map 里已有的键——
-        # 回滚执行"成功"了，nodeSelector 原封不动（k8s.py 的 _rollout_undo 现在
-        # 会自己把这一点报出来）。所以正确行为是明说"我改不了，请手工执行"。
-        expect=frozenset(),
+        # 2026-09-24：补了 patch_node_selector 之后**有工具了**。
+        # 它用 replace 整对象（merge patch 删不掉 map 里的键，JSON patch 那条路
+        # 被 API Server 422 拒了）。端到端实测：干跑通过 → 执行 → 键真的被删掉
+        # → Pod 全部 Running。
+        # ⚠️ 但 rollout_undo 仍然是错的（merge patch 删不掉键），提它照样失败。
+        # 保留 allow_none：退回"明说没工具"也不算离谱。
+        expect=frozenset({"patch_node_selector"}),
         allow_none=True,
         forbid=frozenset({"rollout_restart"}),
         mentions=("节点", "nodeSelector", "调度", "node-pool"),
