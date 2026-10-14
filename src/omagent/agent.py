@@ -149,11 +149,49 @@ class OpsAgent:
                 "ms": int((time.time() - started) * 1000),
             })
             raise
+        # 自动附带匹配到的经验。
+        #
+        # **不能让模型自己决定要不要查历史**——实测两次了：
+        #   get_recent_changes 工具在 15 个场景调用 0 次
+        #   search_cases 在 pending 场景调用 0 次（其他场景都调了）
+        # 两次都是"工具就在那儿，模型不去够"。
+        #
+        # 所以改成：模型读集群状态时**自动**把匹配的经验附在后面。
+        # 它不需要知道有这回事，就一定能看到。
+        out = self._attach_memory(tool, clean, out)
+
         self.audit.append("readonly_call", {
             "operator": self.operator, "tool": tool, "params": clean, "ok": True,
             "ms": int((time.time() - started) * 1000),
         })
         return out
+
+    # 读这几个工具时自动附带历史经验——它们都是"看清现状"的入口，
+    # 也正是"想想以前怎么修的"最该发生的时刻。
+    _MEMORY_ATTACH_TOOLS = ("get_workload", "get_pods")
+
+    def _attach_memory(self, tool: str, params: dict[str, Any], out: str) -> str:
+        """把匹配的案例/runbook 附在只读结果后面。**失败就静默跳过。**"""
+        if self.cases is None or tool not in self._MEMORY_ATTACH_TOOLS:
+            return out
+        ns = str(params.get("namespace") or "")
+        name = str(params.get("name") or "")
+        kind = str(params.get("kind") or "deployment")
+        if not ns or not name:
+            return out
+        try:
+            from .cases import symptom_tokens
+
+            tokens = symptom_tokens(self.k8s, ns, kind, name)
+            hits = self.cases.search(tokens, limit=2)
+        except Exception:  # noqa: BLE001
+            return out
+        if not hits:
+            return out
+        lines = ["", "【历史上遇到过的同类症状】"]
+        for score, case in hits:
+            lines.append(case.render(score, name))
+        return out + "\n".join(lines)
 
     # ---------------------------------------------------------------- 写入路径
 
