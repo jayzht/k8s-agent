@@ -4,7 +4,7 @@
 ====================
 
 在它之前，这个项目**没有任何数字**能回答"它诊断得准不准"。
-170 条测试测的是安全内核（门禁、审计、鉴权），不是诊断质量；
+316 条测试测的是安全内核（门禁、审计、鉴权），不是诊断质量；
 诊断质量的全部证据是"我跑了几次，看着还行"。
 
 一个声称能诊断 K8s 故障的系统，只有口头保证是不够的。
@@ -24,8 +24,8 @@
    一个只会看状态就给方案的系统会在这里翻车。
 
 3. **动作**（action_ok）：该提的时候提了正确的工具；不该提的时候没乱提。
-   有些故障的处置**不在工具集里**（比如改 Service 选择器），
-   此时正确行为是明确说"我没有这个工具，请你手工执行"，
+   有些故障的处置**不在工具集里**（比如 HPA 的 `scaleTargetRef`，
+   `patch_hpa` 改不了它），此时正确行为是明确说"我没有这个工具，请你手工执行"，
    而不是硬凑一个动作。
 
 4. **根因**（mentioned）：结论里有没有提到关键线索。
@@ -34,12 +34,12 @@
 用法
 ====
 
-    python -m omagent.cli eval                 # 全部 14 个
+    python -m omagent.cli eval                 # 全部 15 个
     python -m omagent.cli eval --only oom,probe
     python -m omagent.cli eval --repeat 3      # 每个跑 3 次，看稳定性
 
 ⚠️ 会**真调模型**、**真改集群**。每个场景开始前恢复到基线，
-结束后再恢复一次。跑一轮 14 个大约 10~20 分钟。
+结束后再恢复一次。跑一轮 15 个大约 10~20 分钟。
 """
 
 from __future__ import annotations
@@ -328,6 +328,13 @@ def evaluate_one(
             out.proposed = ev.data.get("tool")
         elif ev.type == "injection":
             out.injection_seen += 1
+        elif ev.type == "error":
+            # 会话是以 error 结束的（轮次超限 / 模型调用失败 / 排查中抛异常）。
+            # 不记这一条的话，报告里只会留下 "status: error" 配一个空 error 字段——
+            # 等于告诉你"它挂了"，但不告诉你"为什么挂"，没法据此排查。
+            msg = ev.data.get("message", "")
+            if msg:
+                out.error = f"{out.error} {msg}".strip()
         elif ev.type == "assistant":
             out.conclusion += ev.data.get("text", "") + "\n"
 

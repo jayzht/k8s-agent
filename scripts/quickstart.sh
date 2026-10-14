@@ -91,11 +91,11 @@ fi
 step "4/5 准备镜像并启动服务"
 # 镜像来源按优先级：
 #   1. OMAGENT_IMAGE 指定的仓库镜像（已发布的话一条 pull 就够，不用源码）
-#   2. 本地已有 omagent:1.0.0
+#   2. 本地已有 omagent:1.0.4
 #   3. 从当前源码构建
 if [ -n "${OMAGENT_IMAGE:-}" ]; then
   # 先看本地有没有。OMAGENT_IMAGE 既可能是仓库镜像（ghcr.io/x/y:1.0），
-  # 也可能只是个本地名（omagent:1.0.0）——后者去 Docker Hub 拉必然失败，
+  # 也可能只是个本地名（omagent:1.0.4）——后者去 Docker Hub 拉必然失败，
   # 而且失败不该让整个流程挂掉。标签是不变的，本地有就用本地的。
   if docker image inspect "$OMAGENT_IMAGE" >/dev/null 2>&1; then
     echo "  本地已有 $OMAGENT_IMAGE"
@@ -105,13 +105,13 @@ if [ -n "${OMAGENT_IMAGE:-}" ]; then
       || die "拉取失败，本地也没有这个镜像：$OMAGENT_IMAGE
      （离线环境可以改为从源码构建：unset OMAGENT_IMAGE）"
   fi
-elif docker image inspect omagent:1.0.0 >/dev/null 2>&1; then
-  echo "  本地已有 omagent:1.0.0，跳过构建"
+elif docker image inspect omagent:1.0.4 >/dev/null 2>&1; then
+  echo "  本地已有 omagent:1.0.4，跳过构建"
 else
   echo "  从源码构建镜像…"
-  if ! DOCKER_BUILDKIT=1 docker build -q -t omagent:1.0.0 . >/dev/null 2>&1; then
+  if ! DOCKER_BUILDKIT=1 docker build -q -t omagent:1.0.4 . >/dev/null 2>&1; then
     warn "buildx 不可用，退回经典构建器"
-    DOCKER_BUILDKIT=0 docker build -q -t omagent:1.0.0 . >/dev/null || die "镜像构建失败"
+    DOCKER_BUILDKIT=0 docker build -q -t omagent:1.0.4 . >/dev/null || die "镜像构建失败"
   fi
 fi
 KUBECONFIG_PATH="$ROOT/var/kubeconfig" "${COMPOSE[@]}" up -d --no-build

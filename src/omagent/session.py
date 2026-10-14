@@ -320,6 +320,14 @@ class ChatSession:
         self._call_counts: dict[str, int] = {}    # 工具+参数 -> 次数
         self._miss_streak: dict[str, int] = {}    # 工具 -> 连续没查到东西的次数
         self._loop_nudged = False                 # 本轮是否已经点破过
+        # 待注入的护栏提示。**必须延后到本回合的 tool 结果全部落完再插**：
+        # OpenAI 协议要求 tool 结果紧跟在带 tool_calls 的 assistant 消息之后，
+        # 中间夹一条 system 会让 API 报 400
+        # （"insufficient tool messages following tool_calls message"）。
+        # 真实踩过的坑：模型一个回合并发几个 tool_calls 时，护栏在第 1 个结果
+        # 之后就插话，把后面的结果和 assistant 消息截断了——评测的 crash 场景
+        # 因此稳定报 400，看起来像"模型不行"，其实是这里把上下文写坏了。
+        self._deferred_nudge: str | None = None
         # 本次会话检出过的注入尝试。会显示在确认卡片上——即使模型被骗了，
         # 人还有机会看出来。
         self.injections: list[dict[str, Any]] = []
@@ -492,6 +500,7 @@ class ChatSession:
             self.messages.append({"role": "user", "content": text})
             self._nudged = False   # 新的用户消息 = 新的一轮，提醒次数重置
             self._loop_nudged = False
+            self._deferred_nudge = None
             self._call_counts.clear()
             self._miss_streak.clear()
             self._start_run()
@@ -614,6 +623,12 @@ class ChatSession:
                     if not self._handle_call(call):
                         return  # 写操作，已挂起等人批准
                     continue
+
+                # 本回合的 tool 结果到这里才全部落完，现在插护栏提示是安全的
+                # （早插会把 assistant(tool_calls) 和它的 tool 结果截断 → 400）。
+                if self._deferred_nudge:
+                    self.messages.append({"role": "system", "content": self._deferred_nudge})
+                    self._deferred_nudge = None
 
                 if rounds >= MAX_STEPS:
                     self._emit(
@@ -742,17 +757,16 @@ class ChatSession:
         self._append_tool_result(call.id, call.name, text, ok=ok, params=call.arguments)
 
         # 退化循环护栏：只在**本轮还没点破过**时注入一次，避免把上下文刷满。
+        # 这里只记下来，真正插入 messages 要等本回合的 tool 结果全部落完
+        # （见 _deferred_nudge 的说明）。
         if not self._loop_nudged:
             reason = self._degenerate_reason(call, ok, text)
             if reason:
                 self._loop_nudged = True
                 n = self._call_counts.get(
                     f"{call.name}:{json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)}", 0)
-                self.messages.append({
-                    "role": "system",
-                    "content": LOOP_NUDGE.format(n=max(n, self._miss_streak.get(call.name, 0)),
-                                                 tool=call.name),
-                })
+                self._deferred_nudge = LOOP_NUDGE.format(
+                    n=max(n, self._miss_streak.get(call.name, 0)), tool=call.name)
                 self._emit("note", text=f"（它在原地打转：{reason}，已要求它换角度或下结论）")
         return True
 

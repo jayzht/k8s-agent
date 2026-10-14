@@ -59,16 +59,19 @@ docker run -d --network host \
   -e DEEPSEEK_API_KEY=sk-... \
   -v ~/.kube/config:/kubeconfig/config:ro \
   -v omagent-data:/data \
-  omagent:1.0.0        # 或 ghcr.io/<用户名>/omagent:1.0.0
+  ghcr.io/jayzht/k8s-agent:1.0.4
 
 docker logs <容器名> | grep -A5 首次启动   # 拿 admin 密码
 # → http://127.0.0.1:8765
 ```
 
+> 想自己构建就用 `omagent:1.0.4`（`docker build -t omagent:1.0.4 .`）。
+> 生产上**建议钉版本号**（`:1.0.4`）而不是 `:latest`——`:latest` 会随每次发版移动。
+
 用 compose 也一样，把 compose 文件里的 `build: .` 注释掉、用 `image:` 即可：
 
 ```bash
-OMAGENT_IMAGE=ghcr.io/<用户名>/omagent:1.0.0 \
+OMAGENT_IMAGE=ghcr.io/jayzht/k8s-agent:1.0.4 \
 KUBECONFIG_PATH=~/.kube/config DEEPSEEK_API_KEY=sk-... docker compose up -d
 ```
 
@@ -346,7 +349,7 @@ src/omagent/
   evals.py     15 个剧本的确定性评测（判据可复算，不用 LLM 当裁判）
   models.py    数据契约
 web/           index.html / app.js / style.css —— 无构建步骤的原生前端
-tests/         安全内核 + 会话 + 工具表 + 监控台 + 大屏 + HTTP + MCP + provider（248 条）
+tests/         安全内核 + 会话 + 工具表 + 监控台 + 大屏 + HTTP + MCP + provider（316 条）
 sandbox/
   topology.py      沙箱拓扑表 → 生成 manifests/（改拓扑改这里）
   manifests/       生成的清单：3 个命名空间、25 个工作负载

@@ -413,6 +413,45 @@ def test_裁剪历史不会切断tool_calls配对():
             assert idx > 0 and trimmed[idx - 1].get("tool_calls") or trimmed[idx - 1].get("role") == "tool"
 
 
+# ── 护栏提示的插入位置 ────────────────────────────────────────────────────
+#
+# OpenAI 协议要求：带 tool_calls 的 assistant 消息后面，必须**紧接着**跟满
+# 对应数量的 tool 结果，中间不能夹任何别的角色。
+#
+# 踩过的真坑：退化循环护栏在处理完一个只读调用后就地往 messages 里插了一条
+# system。模型一个回合只要并发多个 tool_calls，而被点破的那次不是最后一个，
+# 这条 system 就会把 assistant 和它后面的 tool 结果截断，API 直接报
+#   400 "insufficient tool messages following tool_calls message"
+# 评测的 crash 剧本因此**稳定**报错，表面上像"模型不行"，其实是这里把
+# 上下文写坏了——所以这条不变量值得钉死。
+
+
+def test_护栏提示不会插在tool结果中间(env):
+    # 同一个工具 + 完全相同的参数，第 3 次触发重复护栏；
+    # 而这一回合总共发了 4 个调用——护栏必须在第 4 个结果落完之后才能插。
+    dup = ("get_pods", {"namespace": "demo"})
+    sess = build(env, [reply_tools(dup, dup, dup, dup), reply_text("查完了")])
+    sess.send("看看 demo 的 pod")
+    run(sess)
+
+    msgs = sess.messages
+    for i, m in enumerate(msgs):
+        tcs = m.get("tool_calls")
+        if not tcs:
+            continue
+        following = [x.get("role") for x in msgs[i + 1:i + 1 + len(tcs)]]
+        assert following == ["tool"] * len(tcs), (
+            f"assistant 带了 {len(tcs)} 个 tool_calls，"
+            f"但紧跟着的是 {following} —— 中间被插了别的角色，API 会报 400"
+        )
+
+    # 位置虽然推迟了，但护栏最终确实注入了（不能因为修位置就把它弄丢）
+    assert any(
+        m.get("role") == "system" and "停一下" in str(m.get("content"))
+        for m in msgs
+    ), "护栏提示应该在本回合收尾后注入，而不是被丢掉"
+
+
 # ── 待批方案的有效期 ──────────────────────────────────────────────────────
 #
 # 卡片上的影响面、dry-run、目标副本数都是**生成那一刻**的快照。

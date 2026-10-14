@@ -27,7 +27,7 @@
 #    那些平台请直接用 `omagent serve`（见 README 路径 A/B）。
 services:
   omagent:
-    image: ${OMAGENT_IMAGE:-omagent:1.0.0}
+    image: ${OMAGENT_IMAGE:-omagent:1.0.4}
     build: .
     # 用宿主机网络：ports 映射会被忽略，服务直接监听在宿主机上
     network_mode: host

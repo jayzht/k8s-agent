@@ -7,7 +7,7 @@
 #     -e DEEPSEEK_API_KEY=sk-... \
 #     -v ~/.kube/config:/kubeconfig/config:ro \
 #     -v omagent-data:/data \
-#     ghcr.io/<你的用户名>/omagent:1.0.0
+#     ghcr.io/jayzht/k8s-agent:1.0.4
 #
 # 打一个 tag 就会自动构建并推送（多架构）：
 #   git tag v1.0.0 && git push origin v1.0.0
@@ -51,7 +51,11 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            # 注意：这个工作流只被 tag 触发，而 tag 推送时 is_default_branch 恒为 false。
+            # 所以这里不能写 enable={{is_default_branch}}——否则 latest 永远不会更新，
+            # 用户拉 :latest 会拿到一个很旧的版本（这个坑真实踩过：latest 停在 1.0.3，
+            # 比 HEAD 落后 17 个提交，巡检/配置修复/MCP 客户端全都不在里面）。
+            type=raw,value=latest
             type=sha,prefix=sha-
 
       - name: 构建并推送
