@@ -135,6 +135,43 @@ class App:
         self._wall_cache = _TTLCache(4.0)
         # 用户从页面上加的外部 MCP server。存在磁盘上，活过重启。
         self.mcp_store = mcp_store or McpServerStore(ROOT / "var" / "mcp_servers.json")
+        # 巡检。默认不启用（要显式开），因为它是**主动**行为——
+        # 会自己起会话、调模型，人应该知道这件事在跑。
+        self.patrol: Any = None
+
+    # ---------------------------------------------------------------- 巡检
+
+    def start_patrol(self, *, interval: float, cooldown: float,
+                     namespaces: list[str]) -> Any:
+        """开巡检：定期扫集群，把**新出现的**异常交给 Agent 去查。
+
+        ⚠️ 边界：巡检**只触发只读调查**，产出仍然是一张待批卡片。
+        它不会执行任何变更——审批门禁一步都不挪。
+        """
+        from .patrol import Patrol
+
+        def investigate(f) -> None:
+            """给一个异常起一个会话，让 Agent 去查。
+
+            每个异常一个独立会话（id 带目标名），这样：
+            - 控制台里能并排看到几个不同故障的调查
+            - 一个查完了不影响另一个
+            - 人点进去有完整的上下文
+            """
+            sid = f"patrol-{f.namespace}-{f.name}-{int(time.time())}"
+            sess = self.session(sid, create=True, namespace=f.namespace,
+                                operator="巡检")
+            sess.send(f.question())
+
+        self.patrol = Patrol(self.agent.k8s, namespaces,
+                             interval=interval, cooldown=cooldown,
+                             on_finding=investigate, cases=self.agent.cases)
+        self.patrol.start()
+        self.audit.append("patrol_started", {
+            "operator": self.operator, "interval": interval,
+            "cooldown": cooldown, "namespaces": namespaces,
+        })
+        return self.patrol
 
     # ---------------------------------------------------------- 外部 MCP 管理
 
@@ -493,6 +530,7 @@ class App:
             # 页面要能看到"接了什么、哪些跳过了、为什么"——否则服务端明明
             # 报了一堆原因，人在界面上却只看到"没有工具"。
             "providers": self.agent.providers.status(),
+            "patrol": self.patrol.status() if self.patrol else {"enabled": False},
             "forbidden": FORBIDDEN,
             "write_namespaces": list(self.agent.write_namespaces),
             "scenarios": self.scenario_menu(),
@@ -808,6 +846,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/status":
                 return self._json(self.app.status())
+            # 告警接入：Alertmanager webhook，或手工触发的简单形态。
+            # 它和定时巡检**走同一条去重路径**，否则同一个故障会出两张卡。
+            if path == "/api/alert":
+                if self.patrol is None:
+                    return self._json({"error": "巡检未启用"}, 409)
+                fresh = self.patrol.ingest_alerts(body or {})
+                return self._json({"ok": True, "accepted": len(fresh),
+                                   "targets": [f.name for f in fresh]})
+
             if path == "/api/mcp/servers":
                 return self._json({"servers": self.app.mcp_servers_view()})
             if path == "/api/console":
@@ -1022,6 +1069,8 @@ def serve(
     bootstrap: bool = True,
     providers_factory: Any = None,
     mcp_store=None,
+    patrol_interval: float = 0.0,
+    patrol_cooldown: float = 1800.0,
 ) -> None:
     from .agent import WRITE_NAMESPACES
 
@@ -1115,6 +1164,12 @@ def serve(
         print("  登录后请立刻改密码：python -m omagent.cli passwd " + name)
         print("  " + "─" * 60)
     print("  所有写操作都需要在页面上人工确认；只读查询自动执行。")
+    if patrol_interval > 0:
+        app.start_patrol(interval=patrol_interval, cooldown=patrol_cooldown,
+                         namespaces=list(agent.write_namespaces))
+        print(f"  巡检：已启用，每 {int(patrol_interval)} 秒扫一次"
+              f"（冷却 {int(patrol_cooldown)} 秒）——"
+              f"**只触发只读调查，改动仍然要你批准**")
     app.start_saver()
     try:
         httpd.serve_forever()

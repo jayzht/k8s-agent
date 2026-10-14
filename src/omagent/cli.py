@@ -40,6 +40,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         session_dir=args.session_dir,
         allow_anonymous=args.allow_anonymous,
         bootstrap=not args.no_bootstrap,
+        patrol_interval=args.patrol_interval,
+        patrol_cooldown=args.patrol_cooldown,
         providers_factory=lambda k8s: _build_providers(k8s, args),
     )
     return 0
@@ -569,6 +571,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-bootstrap", action="store_true",
                    help="用户库不存在时不自动建 admin 账号，直接报错退出")
     _add_provider_args(s)
+    s.add_argument("--patrol-interval", type=float, default=0.0,
+                   help="巡检间隔秒数（0=不启用）。启用后会主动扫集群、自动起会话调查")
+    s.add_argument("--patrol-cooldown", type=float, default=1800.0,
+                   help="同一目标多久内不重复报（默认 1800 秒）")
     s.set_defaults(func=cmd_serve)
 
     t = sub.add_parser("tools", help="打印工具清单与读写切分")
