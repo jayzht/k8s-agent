@@ -205,6 +205,143 @@ class K8sClient:
         # 自检用：问 API Server "我能不能干这个"，比自己试一次干净（无副作用）
         self.authz = client.AuthorizationV1Api()
 
+    # ---------------------------------------------------------- 配置类写操作
+    #
+    # 这四个是"处置能力的天花板"——在此之前，评测里有 4 个场景
+    # （selector / port / probe / pending）的正解都是"明说我没有工具"。
+    # 它们不是危险的变更，是**最普通的运维修复**，缺了它们等于放弃一大块工作。
+
+    def _patch_service_selector(self, ns: str, service: str,
+                                selector: dict[str, str], dry: str | None) -> str:
+        """改 Service 的 selector。选错会让流量**全部送不到**，所以是 caution。"""
+        if not selector:
+            raise ActionRejected("selector 不能为空——那会让 Service 失去所有后端")
+        self.core.patch_namespaced_service(
+            service, ns, {"spec": {"selector": dict(selector)}}, dry_run=dry)
+        return f"已把 Service/{service} 的 selector 改成 {dict(selector)}"
+
+    def _patch_service_port(self, ns: str, service: str,
+                            params: dict[str, Any], dry: str | None) -> str:
+        """改某个端口的 targetPort。按端口名或 port 号定位。"""
+        cur = self.core.read_namespaced_service(service, ns)
+        want_name = str(params.get("port_name") or "")
+        want_port = params.get("port")
+        target = params["target_port"]
+        body, hit = [], False
+        for i, p in enumerate(cur.spec.ports or []):
+            if want_name and p.name == want_name:
+                pass
+            elif want_port is not None and int(p.port) == int(want_port):
+                pass
+            else:
+                continue
+            hit = True
+            body.append({"op": "replace", "path": f"/spec/ports/{i}/targetPort",
+                         "value": target})
+        if not hit:
+            raise ActionRejected(
+                f"Service/{service} 里找不到端口 {want_name or want_port}"
+                f"（现有：{[p.name or p.port for p in cur.spec.ports or []]}）")
+        self.core.patch_namespaced_service(service, ns, body, dry_run=dry)
+        return f"已把 Service/{service} 的 targetPort 改成 {target}"
+
+    def _patch_probe(self, ns: str, name: str, params: dict[str, Any],
+                     dry: str | None) -> str:
+        """改探针端口。probe/handler 都能改。"""
+        kind = params.get("kind", "deployment")
+        container = str(params.get("container") or "app")
+        which = str(params.get("probe") or "liveness")
+        if which not in ("liveness", "readiness", "startup"):
+            raise ActionRejected(f"probe 只能是 liveness/readiness/startup，收到 {which!r}")
+        field = {"liveness": "livenessProbe", "readiness": "readinessProbe",
+                 "startup": "startupProbe"}[which]
+        spec = self._container_index(ns, kind, name, container)
+        path = (f"/spec/template/spec/containers/{spec['index']}"
+                f"/{field}/httpGet/port")
+        self._patch_workload(ns, kind, name,
+                             [{"op": "replace", "path": path,
+                               "value": int(params["port"])}], dry)
+        return f"已把 {kind}/{name} 的 {container} {which} 探针端口改成 {params['port']}"
+
+    def _patch_node_selector(self, ns: str, name: str, kind: str,
+                             params: dict[str, Any], dry: str | None) -> str:
+        """设置或**删除** nodeSelector 的键。
+
+        ⚠️ 删除必须用 JSON patch 的 ``remove``，**merge patch 删不掉 map 里已有的键**。
+        这个坑我实测过：回滚一个新加 nodeSelector 的 Deployment，merge patch
+        之后那个键**还在**，而人以为回滚成功了。
+        """
+        cur = self.read_workload(ns, kind, name)
+        existing = dict(getattr(cur.spec.template.spec, "node_selector", None) or {})
+        add = dict(params.get("selector") or {})
+        drop = list(params.get("remove") or [])
+        unknown = [k for k in drop if k not in existing]
+        if unknown:
+            raise ActionRejected(f"nodeSelector 里没有这些键，删不掉：{unknown}")
+
+        if not add and not drop:
+            raise ActionRejected("既没有要新增的 selector，也没有要删的键")
+        want = dict(existing)
+        for k in drop:
+            want.pop(k, None)
+        want.update(add)
+
+        # ⚠️ 这里用 **replace 整个对象**，不是 patch。
+        #
+        # 试过两条 patch 路，都不行：
+        #   merge patch —— 语法上就删不掉 map 里已有的键（这是它的定义）
+        #   JSON patch  —— 要显式指定 Content-Type，客户端那条路径实测被 API Server
+        #                  以 422 拒了（列表 body 被当成 merge patch 发出去了）
+        # 读出来改完再 replace 是唯一不会踩语义坑的做法：**我们本来就已经把对象
+        # 读出来了**（要先知道有哪些键才能删），所以代价只是多传一次完整对象。
+        cur.spec.template.spec.node_selector = want or None
+        try:
+            fn = {"deployment": self.apps.replace_namespaced_deployment,
+                  "statefulset": self.apps.replace_namespaced_stateful_set}[kind]
+        except KeyError:
+            raise ActionRejected(f"不支持对 {kind!r} 做这类修改") from None
+        try:
+            fn(name, ns, cur, dry_run=dry)
+        except ApiException as exc:
+            raise ActionRejected(f"修改被拒绝: {exc.reason} {exc.body}") from exc
+        parts = []
+        if drop:
+            parts.append(f"删掉 {drop}")
+        if add:
+            parts.append(f"设为 {add}")
+        return f"已把 {kind}/{name} 的 nodeSelector " + "，".join(parts)
+
+    def _patch_workload(self, ns: str, kind: str, name: str,
+                        body: Any, dry: str | None) -> None:
+        """按 kind 分发 patch。**列表 body 走 JSON patch，字典走 merge patch。**
+
+        这个区分是必须的：merge patch **删不掉 map 里已有的键**。
+        所以"删掉一个 nodeSelector"只能用 JSON patch 的 ``remove``。
+        """
+        fns = {
+            "deployment": self.apps.patch_namespaced_deployment,
+            "statefulset": self.apps.patch_namespaced_stateful_set,
+        }
+        fn = fns.get(kind)
+        if fn is None:
+            raise ActionRejected(f"不支持对 {kind!r} 做这类 patch")
+        kwargs: dict[str, Any] = {"dry_run": dry}
+        if isinstance(body, list):
+            kwargs["_content_type"] = "application/json-patch+json"
+        try:
+            fn(name, ns, body, **kwargs)
+        except ApiException as exc:
+            raise ActionRejected(f"patch 被拒绝: {exc.reason} {exc.body}") from exc
+
+    def _container_index(self, ns: str, kind: str, name: str, container: str) -> dict[str, Any]:
+        cur = self.read_workload(ns, kind, name)
+        for i, c in enumerate(cur.spec.template.spec.containers or []):
+            if c.name == container:
+                return {"index": i, "container": c}
+        raise ActionRejected(
+            f"{kind}/{name} 里没有名为 {container!r} 的容器"
+            f"（实际：[{[c.name for c in cur.spec.template.spec.containers or []]}]）")
+
     # ------------------------------------------------------------------ 探活
 
     @staticmethod
@@ -831,6 +968,14 @@ class K8sClient:
             return self._drain(params["node"], ns, dry, params)
         if tool == "patch_resources":
             return self._patch_resources(ns, name, params, dry)
+        if tool == "patch_service_selector":
+            return self._patch_service_selector(ns, params["service"], params["selector"], dry)
+        if tool == "patch_service_port":
+            return self._patch_service_port(ns, params["service"], params, dry)
+        if tool == "patch_probe":
+            return self._patch_probe(ns, name, params, dry)
+        if tool == "patch_node_selector":
+            return self._patch_node_selector(ns, name, params.get("kind", "deployment"), params, dry)
         if tool == "patch_hpa":
             return self._patch_hpa(ns, params["hpa"], params, dry)
         if tool == "rollback_configmap":

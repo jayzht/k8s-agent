@@ -35,6 +35,11 @@ READ_FOR_WRITE: dict[str, set[str]] = {
     "uncordon_node": {"get_nodes"},
     "drain_node": {"get_nodes", "get_pdb"},
     "rollback_configmap": {"get_configmap"},
+    # 配置类修复 —— 能改就必须能先看，否则等于让人闭着眼睛改
+    "patch_service_selector": {"get_services", "get_endpoints"},
+    "patch_service_port": {"get_services"},
+    "patch_probe": {"get_workload"},
+    "patch_node_selector": {"get_workload", "get_nodes"},
 }
 
 

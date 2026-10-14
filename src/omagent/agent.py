@@ -351,6 +351,18 @@ class OpsAgent:
                     if not isinstance(value, dict):
                         raise ValueError("需要对象")
                     clean[key] = {str(k): str(v) for k, v in value.items()}
+                elif spec_kind == "array":
+                    # 数组以前会掉进最后那个 else，被 str() 成一个字符串——
+                    # 于是 remove=["node-pool"] 到了实现里变成 "['node-pool']"，
+                    # 按字符迭代，报出"删不掉 [' ', 'n', 'o' ...]"这种鬼话。
+                    # **任何用数组参数的写工具都会中招**，不只是这一个。
+                    if not isinstance(value, (list, tuple)):
+                        raise ValueError(f"需要数组，收到 {type(value).__name__}")
+                    item_kind = (props[key].get("items") or {}).get("type")
+                    if item_kind == "integer":
+                        clean[key] = [int(x) for x in value]
+                    else:
+                        clean[key] = [str(x) for x in value]
                 else:
                     clean[key] = str(value)
             except (TypeError, ValueError) as exc:
