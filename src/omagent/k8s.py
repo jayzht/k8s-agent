@@ -23,6 +23,13 @@ from kubernetes.client.rest import ApiException
 
 DRY_RUN_ALL = "All"
 
+# Deployment 和它派生的每个 ReplicaSet 都带这个注解，值是发布版本号。
+#
+# ⚠️ 不要用 ``rollout.kubernetes.io/revision``：那不是 K8s 写过的注解键，
+# 照它去找版本会**永远找不到任何历史**（而且不报错，只是"没有可回滚版本"）。
+# 这个坑很隐蔽，所以只认这一个规范键。
+REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
+
 
 class K8sUnavailable(RuntimeError):
     """无法连接集群。调用方应降级到只读缓存或提示用户走原流程。"""
@@ -981,6 +988,17 @@ class K8sClient:
             return self._patch_node_selector(ns, name, params.get("kind", "deployment"), params, dry)
         if tool == "patch_hpa":
             return self._patch_hpa(ns, params["hpa"], params, dry)
+        if tool in ("patch_resourcequota", "patch_pdb"):
+            # ⚠️ 必须**延迟导入**：capacity.py 反向 import 了本模块
+            # （它要用 ActionRejected / K8sClient / parse_quantity），
+            # 在文件顶部导入会形成循环导入。
+            # 第一次写的时候忘了，干跑直接 NameError——而"干跑"正是审批卡片
+            # 上给人看的东西，坏了的话卡片上就是一句报错。
+            from . import capacity
+
+            if tool == "patch_resourcequota":
+                return capacity.patch_resourcequota(self, ns, name, params, dry)
+            return capacity.patch_pdb(self, ns, name, params, dry)
         if tool == "patch_hpa_target":
             return self._patch_hpa_target(ns, params["hpa"], params, dry)
         if tool == "rollback_configmap":
@@ -988,6 +1006,19 @@ class K8sClient:
             if not isinstance(data, dict) or not data:
                 raise ActionRejected("rollback_configmap 需要提供要恢复的 data")
             return self.replace_configmap_data(ns, params["name"], data)
+        # 变更管理：发布 / 回滚到指定版本 / 金丝雀灰度
+        if tool == "patch_image":
+            return self._patch_image(ns, name, params.get("kind", "deployment"), params, dry)
+        if tool == "patch_configmap":
+            return self._patch_configmap(ns, name, params, dry)
+        if tool == "rollout_undo_to":
+            return self._rollout_undo_to(ns, name, params.get("kind", "deployment"), params, dry)
+        if tool == "canary_start":
+            return self._canary_start(ns, name, params, dry)
+        if tool == "canary_promote":
+            return self._canary_promote(ns, name, params, dry)
+        if tool == "canary_abort":
+            return self._canary_abort(ns, name, params, dry)
         raise ActionRejected(f"未实现的写操作: {tool}")
 
     def _rollout_restart(self, ns: str, name: str, kind: str, dry: str | None) -> str:
@@ -1013,81 +1044,569 @@ class K8sClient:
     def _rollout_undo(self, ns: str, name: str, dry: str | None) -> str:
         # 通过回滚注解无法直接表达，改用 rollout undo 的等价物：
         # 读取 ReplicaSet 历史，切回上一个 revision 的 pod template。
-        try:
-            dep = self.apps.read_namespaced_deployment(name, ns)
-            selector = dep.spec.selector.match_labels or {}
-            sel = ",".join(f"{k}={v}" for k, v in selector.items())
-            rss = self.apps.list_namespaced_replica_set(ns, label_selector=sel).items
-            owned = [
-                r
-                for r in rss
-                if any(
-                    ref.kind == "Deployment" and ref.name == name
-                    for ref in (r.metadata.owner_references or [])
-                )
-            ]
-            if len(owned) < 2:
-                raise ActionRejected("没有可回滚的历史版本（ReplicaSet 少于 2 个）")
+        dep = self.read_workload(ns, "deployment", name)
+        labels = dict(getattr(getattr(dep.spec, "selector", None), "match_labels", None) or {})
+        owned = [rs for _, rs in self._owned_replicasets(ns, name, labels)]
+        if len(owned) < 2:
+            raise ActionRejected("没有可回滚的历史版本（ReplicaSet 少于 2 个）")
 
-            # ⚠️ 回滚目标 = **"非最新"的那个版本**，而不是"replicas==0 的那个"。
-            #
-            # 曾经用"replicas==0"来识别历史版本，结果是：
-            # **新版本崩了导致滚动更新卡住时，新旧两个 ReplicaSet 都还有副本，
-            # 于是找不到"非活跃"的 RS → 拒绝回滚。**
-            # 而"新版本崩了"恰恰是最需要回滚的时刻——这个判据把最重要的场景堵死了。
-            #
-            # 正确语义：按创建时间排序，最新的是"当前版本"（无论它健康与否），
-            # 回滚目标是其余里最新的那个。
-            owned.sort(key=lambda r: r.metadata.creation_timestamp, reverse=True)
-            target = owned[1]
-            body = {
-                "spec": {
-                    "template": client.ApiClient().sanitize_for_serialization(target.spec.template)
-                }
+        # ⚠️ 回滚目标 = **"非最新"的那个版本**，而不是"replicas==0 的那个"。
+        #
+        # 曾经用"replicas==0"来识别历史版本，结果是：
+        # **新版本崩了导致滚动更新卡住时，新旧两个 ReplicaSet 都还有副本，
+        # 于是找不到"非活跃"的 RS → 拒绝回滚。**
+        # 而"新版本崩了"恰恰是最需要回滚的时刻——这个判据把最重要的场景堵死了。
+        #
+        # 正确语义：按创建时间排序，最新的是"当前版本"（无论它健康与否），
+        # 回滚目标是其余里最新的那个。
+        owned.sort(key=lambda r: r.metadata.creation_timestamp, reverse=True)
+        target = owned[1]
+        body = {
+            "spec": {
+                "template": client.ApiClient().sanitize_for_serialization(target.spec.template)
             }
+        }
+        try:
             self.apps.patch_namespaced_deployment(name, ns, body, dry_run=dry)
         except ApiException as exc:
             raise ActionRejected(f"rollout undo 被拒绝: {exc.reason}") from exc
 
-        # ⚠️ 这里用的是 **merge patch**，而 merge patch **删不掉 map 里已有的键**——
-        # 它只能覆盖"新旧模板都有"的字段。所以回滚有两类结果：
-        #   · 改了值（镜像、环境变量的值、探针端口）→ 能滚回去
-        #   · **新增了字段**（比如加了个 nodeSelector、加了个注解）→ **滚不掉**
-        # 后者尤其坑：操作员看到"已回滚"却发现问题还在。
-        # 真实踩到过：pending 剧本（patch 加了 nodeSelector）回滚后 nodeSelector 原封不动。
-        #
-        # dry-run 看不出这个问题（它只校验请求合法性），所以这里**执行后复查**，
-        # 把没滚干净的部分如实报出来。宁可说"回滚不完整"，也不要给一个假的成功。
-        leftover: list[str] = []
-        if dry is None:
-            try:
-                now = self.apps.read_namespaced_deployment(name, ns)
-                want = client.ApiClient().sanitize_for_serialization(target.spec.template)
-                cur = client.ApiClient().sanitize_for_serialization(
-                    now.spec.template
-                ) if now.spec and now.spec.template else {}
-                # 只看"新模板多出来的顶层字段"——值的变化是回滚的正常工作
-                cur_spec = (cur.get("spec") or {})
-                want_spec = (want.get("spec") or {})
-                for key in cur_spec:
-                    if key not in want_spec and cur_spec.get(key):
-                        leftover.append(f"spec.{key}")
-                for c_now, c_want in zip(cur_spec.get("containers") or [],
-                                         want_spec.get("containers") or []):
-                    for key in c_now:
-                        if key not in c_want and c_now.get(key):
-                            leftover.append(f"container.{c_now.get('name')}.{key}")
-            except Exception:  # noqa: BLE001
-                pass
-
+        leftover = (
+            [] if dry is not None
+            else self._template_rollback_leftover(ns, name, target.spec.template)
+        )
         msg = f"已回滚 {name} 到上一版本（来源 ReplicaSet: {target.metadata.name}）"
-        if leftover:
-            msg += (
-                f"；⚠️ 但回滚**不完整**：{', '.join(sorted(set(leftover))[:4])} "
-                f"在新模板里存在、旧模板里没有，merge patch 删不掉它们。"
-                f"这些字段需要手工处理（kubectl patch --type=json 用 remove 操作）。"
-            )
+        return msg + self._leftover_note(leftover)
+
+    # ------------------------------------------------- 变更管理（发布/回滚/灰度）
+    #
+    # 这一组回答的是"怎么安全地换版本"，而不是"怎么修一个坏掉的对象"。
+    # 它延续同一条主张：**能改的字段是枚举出来的**——发布最常见的动作是换镜像，
+    # 那就只给"换镜像"这一个入口，而不是顺手开一个能改任意字段的 patch，
+    # 更不会引入 apply_manifest（那等于把整条参数化边界让掉）。
+
+    @staticmethod
+    def canary_name(name: str) -> str:
+        """金丝雀 Deployment 的名字由稳定版名字推导，**不接受调用方指定**。"""
+        return f"{name}-canary"
+
+    @staticmethod
+    def _containers_of(workload: Any) -> list[Any]:
+        """取 pod template 里的容器列表。取不到就是空表，由调用方给出人话错误。"""
+        tmpl = getattr(getattr(workload, "spec", None), "template", None)
+        spec = getattr(tmpl, "spec", None)
+        return list(getattr(spec, "containers", None) or [])
+
+    @staticmethod
+    def _json_pointer(key: str) -> str:
+        """JSON Pointer 的键名转义（``~`` → ``~0``、``/`` → ``~1``）。
+
+        ConfigMap 的键名约束本身不含这两个字符，但转义一次不花什么代价，
+        防的是约束放宽之后出现"键名里带 /，patch 打到别的路径上"这种鬼故事。
+        """
+        return str(key).replace("~", "~0").replace("/", "~1")
+
+    @staticmethod
+    def _revision_of(obj: Any) -> int | None:
+        """从对象的 revision 注解里读版本号，读不到返回 None。
+
+        优先认 ``deployment.kubernetes.io/revision``（K8s 控制器写的规范键）；
+        兜底再扫一遍任何以 ``/revision`` 结尾的注解键——纯粹是为了容错，
+        因为一旦注解键名写错（比如写成 ``rollout.kubernetes.io/revision``），
+        症状是"查不到任何历史版本"而不是报错，非常难查。
+        """
+        annotations = getattr(getattr(obj, "metadata", None), "annotations", None) or {}
+        raw = annotations.get(REVISION_ANNOTATION)
+        if raw is None:
+            for key, value in annotations.items():
+                if key.endswith("/revision"):
+                    raw = value
+                    break
+        if raw is None:
+            return None
+        try:
+            return int(str(raw))
+        except (TypeError, ValueError):
+            return None
+
+    def _owned_replicasets(
+        self, ns: str, name: str, labels: dict[str, str] | None = None
+    ) -> list[tuple[int | None, Any]]:
+        """属于 Deployment/{name} 的 ReplicaSet，按 revision 升序返回 ``(revision, rs)``。
+
+        归属判据用 **ownerReference**，而不是 label selector：selector 只说明
+        "Pod 可能属于它"，而 ownerReference 是控制器自己写下的归属关系，
+        不会因为有人手改标签而漂移（改标签是运维里最常见的操作之一）。
+        selector 只用来减少一次列表返回的量。
+        """
+        kwargs: dict[str, Any] = {}
+        if labels:
+            selector = ",".join(f"{k}={v}" for k, v in labels.items())
+            if selector:
+                kwargs["label_selector"] = selector
+        try:
+            items = self.apps.list_namespaced_replica_set(ns, **kwargs).items
+        except ApiException as exc:
+            raise ActionRejected(f"读取 ReplicaSet 失败: {exc.reason}") from exc
+
+        owned: list[tuple[int | None, Any]] = []
+        for rs in items:
+            refs = rs.metadata.owner_references or []
+            if not any(ref.kind == "Deployment" and ref.name == name for ref in refs):
+                continue
+            owned.append((self._revision_of(rs), rs))
+
+        def _sort_key(item: tuple[int | None, Any]):
+            # 没有 revision 注解的排最后：它能显示，但**不能**当回滚目标
+            rev, rs = item
+            ts = getattr(rs.metadata, "creation_timestamp", None)
+            return (rev is None, rev if rev is not None else 0, str(ts or ""))
+
+        owned.sort(key=_sort_key)
+        return owned
+
+    @staticmethod
+    def _current_revision(workload: Any, versions: list[tuple[int | None, Any]]) -> int | None:
+        """当前版本号。
+
+        优先用 Deployment 自己身上的 revision 注解，它才是控制器写的
+        "我现在是第几版"；"取最大的 revision"只是兜底——某个编号更大的 RS
+        可能刚被创建、还没真正接管。
+        """
+        rev = K8sClient._revision_of(workload)
+        if rev is not None:
+            return rev
+        known = [r for r, _ in versions if r is not None]
+        return max(known) if known else None
+
+    def _template_rollback_leftover(
+        self, ns: str, name: str, target_template: Any
+    ) -> list[str]:
+        """回滚后复查：merge patch 删不掉"新模板有、旧模板没有"的字段。
+
+        为什么必须复查：``_rollout_undo`` / ``rollout_undo_to`` 用的是
+        **merge patch**，而 merge patch 只能覆盖"新旧模板都有"的键：
+          · 改了值（镜像、环境变量的值、探针端口）→ 能滚回去
+          · **新增了字段**（加了个 nodeSelector、加了个注解）→ **滚不掉**
+        dry-run 只校验请求合法性，**看不出**这个语义差异，所以只能执行后读回来比。
+        真实踩到过：pending 剧本（patch 加了 nodeSelector）回滚后 nodeSelector 原封不动，
+        操作员看到"已回滚"却发现问题还在。
+
+        抽成 helper 而不是复制两份：这个检查逻辑有两个调用方
+        （``rollout_undo`` 和 ``rollout_undo_to``），复制粘贴迟早只修一边。
+        """
+        leftover: list[str] = []
+        try:
+            now = self.apps.read_namespaced_deployment(name, ns)
+            api = client.ApiClient()
+            want = api.sanitize_for_serialization(target_template)
+            now_tmpl = getattr(getattr(now, "spec", None), "template", None)
+            cur = api.sanitize_for_serialization(now_tmpl) if now_tmpl else {}
+            # 只看"新模板多出来的顶层字段"——值的变化是回滚的正常工作
+            cur_spec = cur.get("spec") or {}
+            want_spec = (want or {}).get("spec") or {}
+            for key in cur_spec:
+                if key not in want_spec and cur_spec.get(key):
+                    leftover.append(f"spec.{key}")
+            for c_now, c_want in zip(cur_spec.get("containers") or [],
+                                     want_spec.get("containers") or []):
+                for key in c_now:
+                    if key not in c_want and c_now.get(key):
+                        leftover.append(f"container.{c_now.get('name')}.{key}")
+        except Exception:  # noqa: BLE001
+            pass   # 复查失败不该把回滚本身的结果说成失败
+        return leftover
+
+    @staticmethod
+    def _leftover_note(leftover: list[str]) -> str:
+        if not leftover:
+            return ""
+        return (
+            f"；⚠️ 但回滚**不完整**：{', '.join(sorted(set(leftover))[:4])} "
+            f"在新模板里存在、旧模板里没有，merge patch 删不掉它们。"
+            f"这些字段需要手工处理（kubectl patch --type=json 用 remove 操作）。"
+        )
+
+    def _patch_image(self, ns: str, name: str, kind: str,
+                     params: dict[str, Any], dry: str | None) -> str:
+        """换指定容器的镜像——"发布新版本"最常用的一件事。
+
+        为什么用 **JSON patch 精确定位到 ``/spec/template/spec/containers/<idx>/image``**，
+        而不是整块替换 pod template：
+        · 整块替换是拿一份**读到的旧快照**写回去，会顺手抹掉这期间别人对同一个
+          template 的改动（并发下这是真会发生的）；
+        · merge patch 语义上只能"合并"，表达不了"删掉某个键"，所以整块替换还会
+          把上一次没滚干净的字段一起带过去（见 ``_template_rollback_leftover``）。
+        只改一个路径，就不会误伤别的字段，也不会掩盖别的改动。
+        """
+        kind = str(kind or "deployment").lower()
+        image = str(params.get("image") or "").strip()
+        if not image:
+            raise ActionRejected("patch_image 需要 image（新镜像，如 registry/app:v2）")
+        if any(ch.isspace() for ch in image):
+            raise ActionRejected(f"image 里不能有空白字符：{image!r}")
+
+        cur = self.read_workload(ns, kind, name)
+        containers = self._containers_of(cur)
+        if not containers:
+            raise ActionRejected(f"{kind}/{name} 的 pod template 里没有容器，改不了镜像")
+
+        want = str(params.get("container") or "").strip()
+        if want:
+            idx = next((i for i, c in enumerate(containers) if c.name == want), None)
+            if idx is None:
+                # 报出**现有容器名列表**，模型拿到就能自己改对参数重试，
+                # 而不是回去猜（这个项目里"错误信息要能直接指导下一步"是硬约定）
+                raise ActionRejected(
+                    f"{kind}/{name} 里没有名为 {want!r} 的容器；"
+                    f"现有容器：{[c.name for c in containers]}。"
+                    f"用 container 参数指定其中之一。")
+        else:
+            # 默认取名为 app 的容器；没有就取第一个——单容器工作负载占绝大多数，
+            # 强制调用方先读一遍容器名只会白多一轮往返。
+            idx = next((i for i, c in enumerate(containers) if c.name == "app"), 0)
+
+        current = containers[idx].image
+        # 原来没有 image 字段时，replace 会因为路径不存在被 422 拒掉，所以按存在与否选 op
+        op = "replace" if current else "add"
+        self._patch_workload(ns, kind, name, [
+            {"op": op,
+             "path": f"/spec/template/spec/containers/{idx}/image",
+             "value": image},
+        ], dry)
+
+        msg = (f"已把 {kind}/{name} 的容器 {containers[idx].name} 镜像从 "
+               f"{current or '（无）'} 改成 {image}")
+        if dry is None:
+            # ⚠️ **执行后复查**：API 接受请求不等于改动落地。
+            # 可能被别的控制器/回滚覆盖，也可能操作员点的批准已经过期。
+            # 读回来的值才是事实；对不上就如实说，不要给一个假的成功。
+            try:
+                now = self.read_workload(ns, kind, name)
+                got = self._containers_of(now)[idx].image
+            except Exception as exc:  # noqa: BLE001
+                got = f"<复查失败: {exc}>"
+            if got != image:
+                msg += (f"；⚠️ 但复查读回的镜像仍是 {got}，这次改动**没有生效**。"
+                        f"可能有别的控制器/回滚覆盖了它，请重新核实后再下结论。")
+            else:
+                msg += "（已复查确认镜像生效）"
         return msg
+
+    def _patch_configmap(self, ns: str, name: str,
+                         params: dict[str, Any], dry: str | None) -> str:
+        """改 ConfigMap 的键值（新增/覆盖 + 删除键）。
+
+        ⚠️ 带 ``remove`` 时必须走 **JSON patch**：merge patch 是"按 key 合并"的，
+        **语法上就删不掉 map 里已有的键**。这和 ``_patch_node_selector`` 里
+        "回滚删掉一个 nodeSelector 却删不掉"是同一个坑，照那个模式处理。
+
+        ⚠️ 返回值必须写清"改完不会自己生效"——否则运维会以为改完就好了。
+        ConfigMap 只是**配置源**，Pod 不会因为它变了就重启：
+          · env / envFrom 注入的值只在容器启动时读一次 → **必须 rollout_restart**；
+          · volume 挂载的文件 kubelet 最终会同步，但进程不去重新读文件，
+            用的照样是旧值。
+        """
+        data = {str(k): str(v) for k, v in (params.get("data") or {}).items()}
+        remove = [str(k) for k in (params.get("remove") or [])]
+        if not data and not remove:
+            raise ActionRejected(
+                "patch_configmap 至少需要 data（要新增/覆盖的键值）或 remove（要删的键）")
+
+        current = self.read_configmap(ns, name)   # 不存在会抛带说明的 ActionRejected
+        unknown = [k for k in remove if k not in current]
+        if unknown:
+            # 删一个不存在的键，多半是键名打错了——报出来比"删了 0 个键"有用得多
+            raise ActionRejected(
+                f"ConfigMap/{name} 里没有这些键，删不掉：{unknown}（现有键：{sorted(current)}）")
+
+        if remove:
+            ops: list[dict[str, Any]] = []
+            if not current:
+                # JSON patch 不能往一个不存在的父路径下加键，先补出 /data
+                ops.append({"op": "add", "path": "/data", "value": {}})
+            for k, v in data.items():
+                # add 对已存在的成员就是替换，所以增改都用 add，不必区分
+                ops.append({"op": "add", "path": f"/data/{self._json_pointer(k)}", "value": v})
+            for k in remove:
+                ops.append({"op": "remove", "path": f"/data/{self._json_pointer(k)}"})
+            body: Any = ops
+            kwargs: dict[str, Any] = {"_content_type": "application/json-patch+json"}
+        else:
+            body = {"data": data}
+            kwargs = {}
+
+        try:
+            self.core.patch_namespaced_config_map(name, ns, body, dry_run=dry, **kwargs)
+        except ApiException as exc:
+            raise ActionRejected(f"修改 ConfigMap 被拒绝: {exc.reason} {exc.body}") from exc
+
+        parts = []
+        if data:
+            parts.append(f"设置 {sorted(data)}")
+        if remove:
+            parts.append(f"删除 {remove}")
+        return (
+            f"已把 {'，'.join(parts)} 写入 ConfigMap/{name}。"
+            f"⚠️ 这**不会**重启任何 Pod：env/envFrom 注入的值必须 "
+            f"rollout_restart 才会被读到；volume 挂载的文件 kubelet 会最终同步，"
+            f"但进程不重新读取文件就还是旧值。"
+        )
+
+    def _rollout_undo_to(self, ns: str, name: str, kind: str,
+                         params: dict[str, Any], dry: str | None) -> str:
+        """回滚到**指定 revision** 的 pod template。
+
+        与 ``rollout_undo``（只看上一版）的区别是目标由调用方指定，
+        所以它**依赖 ``rollout_history`` 先能列出有哪些版本**——不知道版本号就无从指定。
+
+        找目标 RS 用控制器写的 revision 注解；找不到时**列出所有可用 revision**，
+        而不是干巴巴一句"没找到"：模型拿到列表就能改对参数重试。
+        """
+        kind = str(kind or "deployment").lower()
+        if kind != "deployment":
+            raise ActionRejected(
+                f"rollout_undo_to 只支持 deployment（{kind} 的历史不挂在 ReplicaSet 上）")
+        if params.get("revision") is None:
+            raise ActionRejected("rollout_undo_to 需要 revision（整数，用 rollout_history 查）")
+        try:
+            revision = int(params["revision"])
+        except (TypeError, ValueError):
+            raise ActionRejected("rollout_undo_to 的 revision 必须是整数") from None
+
+        dep = self.read_workload(ns, kind, name)
+        labels = dict(getattr(getattr(dep.spec, "selector", None), "match_labels", None) or {})
+        versions = self._owned_replicasets(ns, name, labels)
+        available = [r for r, _ in versions if r is not None]
+        target = next((rs for r, rs in versions if r == revision), None)
+        if target is None:
+            raise ActionRejected(
+                f"Deployment/{name} 里没有 revision={revision} 的版本；"
+                f"现有可用 revision：{available or '（一个都没有）'}。"
+                f"用 rollout_history 看每个版本对应的镜像和副本数。")
+
+        body = {
+            "spec": {
+                "template": client.ApiClient().sanitize_for_serialization(target.spec.template)
+            }
+        }
+        try:
+            self.apps.patch_namespaced_deployment(name, ns, body, dry_run=dry)
+        except ApiException as exc:
+            raise ActionRejected(f"回滚到 revision={revision} 被拒绝: {exc.reason} {exc.body}") from exc
+
+        # 与 rollout_undo 共用同一段复查逻辑（见 _template_rollback_leftover 的说明）
+        leftover = (
+            [] if dry is not None
+            else self._template_rollback_leftover(ns, name, target.spec.template)
+        )
+        msg = (f"已把 Deployment/{name} 回滚到 revision={revision}"
+               f"（来源 ReplicaSet: {target.metadata.name}）")
+        return msg + self._leftover_note(leftover)
+
+    def _deployment_exists(self, ns: str, name: str) -> bool:
+        try:
+            self.apps.read_namespaced_deployment(name, ns)
+            return True
+        except ApiException as exc:
+            if exc.status == 404:
+                return False
+            raise ActionRejected(f"读取 Deployment/{name} 失败: {exc.reason}") from exc
+
+    def _canary_start(self, ns: str, name: str,
+                      params: dict[str, Any], dry: str | None) -> str:
+        """起一个金丝雀 Deployment：从稳定版**克隆** pod template，只改镜像。
+
+        为什么金丝雀名字**固定**为 ``<name>-canary``，不接受调用方指定名字：
+        这个工具的安全边界就是"只能创建一个和稳定版配对的金丝雀"。一旦名字可以由
+        参数决定，``canary_promote`` / ``canary_abort`` 就得先反问"你说的是哪个金丝雀"，
+        而模型完全可以把名字指到**别的**工作负载上——那不是灰度，是误操作。
+        名字由输入推导出来，动作就不可能落到工具作者没想到的对象上。
+
+        为什么标签要和稳定版**完全一致**（只额外加一个 ``omagent-role: canary``）：
+        灰度是按 **Service 的就绪副本数比例**分配的——Service 的 selector 同时选中
+        稳定版和金丝雀的 Pod，kube-proxy 按 Endpoints 里的就绪 Pod 轮询，
+        所以 3:1 的副本比 ≈ 25% 的流量给金丝雀。给金丝雀换一套独立标签就做不到
+        "两个版本同时收流量"，那变成了切流而不是灰度。
+        """
+        kind = str(params.get("kind") or "deployment").lower()
+        if kind != "deployment":
+            raise ActionRejected(f"canary_start 只支持 deployment，收到 {kind!r}")
+        image = str(params.get("image") or "").strip()
+        if not image:
+            raise ActionRejected("canary_start 需要 image（金丝雀版本要跑的镜像）")
+        if params.get("replicas") is None:
+            raise ActionRejected("canary_start 需要 replicas（金丝雀起几个副本，至少 1）")
+        try:
+            replicas = int(params["replicas"])
+        except (TypeError, ValueError):
+            raise ActionRejected("canary_start 的 replicas 必须是整数") from None
+        if replicas < 1:
+            raise ActionRejected(
+                "金丝雀副本数必须 >= 1；0 副本等于没起（想撤掉金丝雀用 canary_abort）")
+
+        stable = self.read_workload(ns, "deployment", name)   # 不存在 → ActionRejected
+        canary_name = self.canary_name(name)
+        if self._deployment_exists(ns, canary_name):
+            # 不覆盖：静默覆盖会把上一次灰度还在观察中的金丝雀换掉，观察者却以为没变
+            raise ActionRejected(
+                f"Deployment/{canary_name} 已经存在，不覆盖。"
+                f"要把它转正用 canary_promote，要撤掉用 canary_abort。")
+
+        containers = self._containers_of(stable)
+        if not containers:
+            raise ActionRejected(f"Deployment/{name} 的 pod template 里没有容器，无法克隆")
+        want = str(params.get("container") or "").strip()
+        if want:
+            idx = next((i for i, c in enumerate(containers) if c.name == want), None)
+            if idx is None:
+                raise ActionRejected(
+                    f"Deployment/{name} 里没有名为 {want!r} 的容器；"
+                    f"现有容器：{[c.name for c in containers]}")
+        else:
+            idx = next((i for i, c in enumerate(containers) if c.name == "app"), 0)
+
+        # 克隆 pod template：先序列化再改，改的是**副本**，稳定版对象一个字都不动
+        template = client.ApiClient().sanitize_for_serialization(stable.spec.template) or {}
+        tmpl_spec = template.get("spec") or {}
+        tmpl_containers = tmpl_spec.get("containers") or []
+        if idx >= len(tmpl_containers):
+            raise ActionRejected(f"克隆 {name} 的 pod template 失败：容器下标越界")
+        tmpl_containers[idx]["image"] = image
+        tmpl_spec["containers"] = tmpl_containers
+        template["spec"] = tmpl_spec
+
+        stable_labels = dict(
+            getattr(getattr(getattr(stable.spec, "template", None), "metadata", None),
+                    "labels", None) or {})
+        if not stable_labels:
+            raise ActionRejected(
+                f"Deployment/{name} 的 pod 模板没有标签，无法保证 Service 同时选中两个版本")
+        labels = {**stable_labels, "omagent-role": "canary"}
+        meta = template.get("metadata") or {}
+        meta["labels"] = labels
+        # 服务端字段留着只会让 create 变脆（某些版本会直接报"不该设置的字段"）
+        for junk in ("creationTimestamp", "resourceVersion", "uid", "managedFields"):
+            meta.pop(junk, None)
+        template["metadata"] = meta
+
+        selector = client.ApiClient().sanitize_for_serialization(stable.spec.selector) or {}
+        body = {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "name": canary_name,
+                "namespace": ns,
+                # Deployment 自己的标签也带上稳定版的那套，便于按应用名一起检索
+                "labels": {**dict(stable.metadata.labels or {}), "omagent-role": "canary"},
+            },
+            "spec": {"replicas": replicas, "selector": selector, "template": template},
+        }
+        try:
+            self.apps.create_namespaced_deployment(ns, body, dry_run=dry)
+        except ApiException as exc:
+            raise ActionRejected(f"创建金丝雀被拒绝: {exc.reason} {exc.body}") from exc
+
+        stable_replicas = stable.spec.replicas or 0
+        total = stable_replicas + replicas
+        share = f"{replicas / total * 100:.0f}%" if total else "?"
+        return (
+            f"已创建金丝雀 Deployment/{canary_name}：镜像={image} 副本={replicas}；"
+            f"稳定版 {name} 未改动。"
+            f"⚠️ 这是按**就绪副本数**加权的灰度，不是按请求数加权：Service 的 selector "
+            f"同时选中两个版本的 Pod，流量按 Endpoints 里的就绪副本数分配——"
+            f"当前稳定版 {stable_replicas} : 金丝雀 {replicas}，约 {share} 的流量会到金丝雀"
+            f"（前提是金丝雀 Pod 真的 Ready，没 Ready 就不会进 Endpoints）。"
+            f"观察好之后用 canary_promote 转正，不行就用 canary_abort 撤掉。"
+        )
+
+    def _canary_promote(self, ns: str, name: str,
+                        params: dict[str, Any], dry: str | None) -> str:
+        """金丝雀转正：把金丝雀的镜像发布到稳定版，再把金丝雀缩到 0。
+
+        为什么"转正"= 把镜像 patch 到稳定版，而不是"把稳定版扩、金丝雀缩"或者
+        "改 Service selector 指向金丝雀"：后两种做法会让"线上到底跑的是哪个版本"
+        变成一个只能靠查 Pod 才能回答的问题，而且下一轮灰度就没有干净的稳定版基线了。
+        稳定版 Deployment 始终是**唯一的事实来源**，金丝雀只是它的一次预演。
+
+        容器按**名字**配对，不按下标：金丝雀是从稳定版克隆的，但只要中途有人调整过
+        容器顺序，按下标就会把镜像搬到错误的容器上。
+        """
+        canary_name = self.canary_name(name)
+        try:
+            canary = self.apps.read_namespaced_deployment(canary_name, ns)
+        except ApiException as exc:
+            if exc.status == 404:
+                raise ActionRejected(
+                    f"没有找到金丝雀 Deployment/{canary_name}——先用 canary_start 起一个") from exc
+            raise ActionRejected(f"读取金丝雀 Deployment/{canary_name} 失败: {exc.reason}") from exc
+
+        stable = self.read_workload(ns, "deployment", name)   # 不存在 → ActionRejected
+        canary_images = {c.name: c.image for c in self._containers_of(canary)}
+        stable_containers = self._containers_of(stable)
+        matched = [c for c in stable_containers if c.name in canary_images]
+        if not matched:
+            raise ActionRejected(
+                f"金丝雀 {canary_name} 的容器名 {sorted(canary_images)} 和稳定版 "
+                f"{[c.name for c in stable_containers]} 对不上，无法确定要发布哪个镜像")
+
+        ops: list[dict[str, Any]] = []
+        applied: list[str] = []
+        for i, c in enumerate(stable_containers):
+            image = canary_images.get(c.name)
+            if not image or image == c.image:
+                continue
+            ops.append({"op": "replace" if c.image else "add",
+                        "path": f"/spec/template/spec/containers/{i}/image",
+                        "value": image})
+            applied.append(f"{c.name}: {c.image or '（无）'} → {image}")
+
+        if ops:
+            self._patch_workload(ns, "deployment", name, ops, dry)
+        # 金丝雀缩到 0：改的是 scale 子资源，不是 pod template——
+        # 改 template 会顺手触发一次没必要的滚动更新。
+        try:
+            self.apps.patch_namespaced_deployment_scale(
+                canary_name, ns, {"spec": {"replicas": 0}}, dry_run=dry)
+        except ApiException as exc:
+            raise ActionRejected(f"把金丝雀缩容到 0 被拒绝: {exc.reason}") from exc
+
+        if applied:
+            head = f"已把金丝雀的镜像发布到 Deployment/{name}（" + "；".join(applied) + "）"
+        else:
+            head = f"金丝雀与 Deployment/{name} 的镜像已经一致，本次没有需要发布的改动"
+        return (
+            head + f"；金丝雀 {canary_name} 已缩容到 0 副本。"
+            f"稳定版的滚动更新由它自己接管——收工前确认新版本 Pod 全部 Ready、"
+            f"旧版本 Pod 已经被替换掉。"
+        )
+
+    def _canary_abort(self, ns: str, name: str,
+                      params: dict[str, Any], dry: str | None) -> str:
+        """放弃金丝雀：把 ``<name>-canary`` 缩到 0，**稳定版一个字都不动**。
+
+        为什么只缩到 0、不删对象：删除不可逆（而且删除的 dry-run 什么都不校验——
+        见 ``_delete_pvc`` 的说明），而缩到 0 已经达成了"流量全部回稳定版"的全部目的，
+        还留着 Deployment 记录供人回看这次灰度试过什么镜像。
+        真要删，那是人的决定，让他在终端里自己删。
+        """
+        canary_name = self.canary_name(name)
+        if not self._deployment_exists(ns, canary_name):
+            raise ActionRejected(
+                f"没有找到金丝雀 Deployment/{canary_name}，没有可放弃的金丝雀"
+                f"（用 canary_start 起金丝雀；稳定版 {name} 不在本工具的作用范围内）")
+        try:
+            self.apps.patch_namespaced_deployment_scale(
+                canary_name, ns, {"spec": {"replicas": 0}}, dry_run=dry)
+        except ApiException as exc:
+            raise ActionRejected(f"把金丝雀缩容到 0 被拒绝: {exc.reason}") from exc
+        return (
+            f"已把金丝雀 Deployment/{canary_name} 缩容到 0 副本——"
+            f"**稳定版 {name} 没有被改动**，流量全部回到稳定版。"
+            f"金丝雀对象保留着（便于回看试过的镜像）；要彻底清掉请人工执行 "
+            f"kubectl delete deployment {canary_name} -n {ns}。"
+        )
+
 
     def _scale(self, ns: str, name: str, kind: str, replicas: int, dry: str | None) -> str:
         body = {"spec": {"replicas": replicas}}
@@ -1325,7 +1844,13 @@ class K8sClient:
             "get_configmap": self._q_configmap,
             "get_hpa": self._q_hpa,
             "get_resourcequota": self._q_resourcequota,
+            # 容量与成本：实现在 capacity.py，这里只做转发。
+            # 单独一个模块是因为那是自成一套的计算（可分配 → 预留 → 用量 → 单价），
+            # 而 k8s.py 已经两千多行。
+            "get_capacity": self._q_capacity,
+            "get_cost": self._q_cost,
             "get_replicasets": self._q_replicasets,
+            "rollout_history": self._q_rollout_history,
             "get_pvc": self._q_pvc,
             "get_metrics": self._q_metrics,
         }.get(tool)
@@ -1435,6 +1960,60 @@ class K8sClient:
             return f"{('Deployment/' + name) if name else '命名空间 ' + ns} 下没有匹配的 ReplicaSet"
         rows.sort()
         return "\n".join(rows)
+
+    def _q_capacity(self, ns: str, params: dict[str, Any]) -> str:
+        """集群余量。实现见 ``capacity.describe_capacity``。"""
+        from . import capacity
+
+        return capacity.describe_capacity(self, ns)
+
+    def _q_cost(self, ns: str, params: dict[str, Any]) -> str:
+        """成本估算。实现见 ``capacity.describe_cost``。"""
+        from . import capacity
+
+        return capacity.describe_cost(self, ns)
+
+    def _q_rollout_history(self, ns: str, params: dict[str, Any]) -> str:
+        """列出可回滚的历史版本（revision / 镜像 / 副本数 / 创建时间 / 是否当前）。
+
+        这个只读工具是 ``rollout_undo_to`` 的**前提**：不知道有哪些 revision，
+        指定回滚目标就只能靠猜，而猜错版本比不回滚更糟。所以它不只是"多一个读工具"，
+        而是那条写路径能不能安全走通的一个组成部分。
+        """
+        kind = str(params.get("kind") or "deployment").lower()
+        name = params.get("name", "")
+        if not name:
+            raise ActionRejected("rollout_history 需要 name")
+        workload = self.read_workload(ns, kind, name)   # 不存在 → ActionRejected
+
+        if kind != "deployment":
+            # StatefulSet 的版本不挂在 ReplicaSet 上（它用 ControllerRevision），
+            # 编不出"可回滚版本"就别硬编——如实说清楚，免得模型拿到一个空列表
+            # 就以为"这个工作负载从来没有发布过"。
+            return (f"{kind}/{name} 没有 ReplicaSet 历史（它的版本挂在 ControllerRevision 上），"
+                    f"rollout_history 目前只能列出 Deployment 的可回滚版本。")
+
+        labels = dict(getattr(getattr(workload.spec, "selector", None), "match_labels", None) or {})
+        versions = self._owned_replicasets(ns, name, labels)
+        if not versions:
+            return (f"Deployment/{name} 没有可回滚的历史版本"
+                    f"（找不到任何 ownerReference 指向它的 ReplicaSet）")
+
+        current = self._current_revision(workload, versions)
+        lines = [f"Deployment/{name} 共 {len(versions)} 个可回滚版本（按 revision 升序）："]
+        for revision, rs in versions:
+            tmpl = getattr(rs.spec, "template", None)
+            images = [c.image for c in (getattr(getattr(tmpl, "spec", None), "containers", None) or [])]
+            desired = rs.spec.replicas
+            ready = getattr(rs.status, "ready_replicas", None) or 0
+            created = getattr(rs.metadata, "creation_timestamp", None)
+            mark = "  ← 当前版本" if revision is not None and revision == current else ""
+            lines.append(
+                f"  revision={revision if revision is not None else '?'} "
+                f"镜像={images or ['?']} 期望副本={desired} 就绪={ready} "
+                f"创建于={created} ReplicaSet={rs.metadata.name}{mark}")
+        lines.append("要回滚到其中某一版，用 rollout_undo_to 并传上面的 revision 数字。")
+        return "\n".join(lines)
 
     def _q_pvc(self, ns: str, params: dict[str, Any]) -> str:
         """列出 PVC 的绑定状态与容量——有状态服务出问题时必看。"""

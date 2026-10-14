@@ -165,11 +165,31 @@ _READONLY: list[ToolSpec] = [
         _obj({"namespace": _NS}, ["namespace"]),
     ),
     ToolSpec(
+        "get_capacity", False,
+        "集群余量：每个节点可分配 vs 已预留 vs 实际使用，还剩多少可调度，"
+        "以及配额使用率和预留最多的工作负载（回答\"新服务还部署得下吗\"）",
+        _obj({"namespace": {**_NS, "description": "只影响配额与\"预留最多\"两段，"
+                                                "节点余量始终按全集群算"}},
+             ["namespace"]),
+    ),
+    ToolSpec(
+        "get_cost", False,
+        "按价格表估算成本：预留花销、按命名空间/工作负载拆分，"
+        "以及**预留了但没用**的闲置成本（那部分才是能省的）",
+        _obj({"namespace": _NS}, ["namespace"]),
+    ),
+    ToolSpec(
         "get_replicasets", False,
         "列出 ReplicaSet 与版本（回滚前先看有几个历史版本）",
         _obj({"namespace": _NS,
               "name": {"type": "string", "description": "只看属于该 Deployment 的 ReplicaSet"}},
              ["namespace"]),
+    ),
+    ToolSpec(
+        "rollout_history", False,
+        "列出某个工作负载的可回滚版本（revision、镜像、副本数、创建时间、哪个是当前版本），"
+        "回滚到指定版本前先看它",
+        _obj({"namespace": _NS, "name": {"type": "string"}, "kind": _KIND}, ["namespace", "name"]),
     ),
     ToolSpec(
         "get_pvc", False, "列出 PVC 的绑定状态与容量（有状态服务出问题必看）",
@@ -288,6 +308,31 @@ _WRITE: list[ToolSpec] = [
         danger="caution",
     ),
     ToolSpec(
+        "patch_resourcequota", True,
+        "改 ResourceQuota 的上限（Pod 因配额用满起不来时用；"
+        "⚠️ 调小到低于当前用量不会回收任何东西，只会让新 Pod 全起不来）",
+        _wobj({"namespace": _NS, "name": {"type": "string", "description": "ResourceQuota 名"},
+               "hard": {"type": "object", "description": "要设的上限，如 {\"requests.cpu\": \"8\"}"},
+               "remove": {"type": "array", "items": {"type": "string"},
+                          "description": "要删除的配额项（merge patch 删不掉，这里走 JSON patch）"}},
+              ["namespace", "name"]),
+        danger="caution",
+    ),
+    ToolSpec(
+        "patch_pdb", True,
+        "改 PodDisruptionBudget（排空节点被 PDB 拦住时用；"
+        "⚠️ 调松会让排空/升级期间可同时中断的副本变多）",
+        _wobj({"namespace": _NS, "name": {"type": "string", "description": "PDB 名"},
+               "min_available": {"type": "string",
+                                 "description": "最少可用，数字或百分比，如 2 或 \"50%\""},
+               "max_unavailable": {"type": "string",
+                                   "description": "最多不可用，与 min_available 互斥"},
+               "remove": {"type": "array", "items": {"type": "string"},
+                          "description": "要删掉的字段名，如 [\"minAvailable\"]"}},
+              ["namespace", "name"]),
+        danger="caution",
+    ),
+    ToolSpec(
         "cordon_node", True, "标记节点不可调度（不影响已在运行的 Pod）",
         _wobj({"node": {"type": "string"}}, ["node"]),
         namespace_scoped=False,   # 节点级动作，没有命名空间这回事
@@ -316,6 +361,85 @@ _WRITE: list[ToolSpec] = [
              "data": {"type": "object", "description": "要恢复的完整键值对", "additionalProperties": {"type": "string"}}},
             ["namespace", "name", "data"],
         ),
+    ),
+    # ── 变更管理：发布 / 回滚到指定版本 / 金丝雀灰度 ──────────────────────
+    #
+    # 这一组不是"修坏掉的东西"，而是"安全地换版本"。之所以不做成一个万能的
+    # patch/apply_manifest：可控的变更管理靠的恰恰是**把常见动作拆成窄工具**。
+    # 参数化边界（比如金丝雀名字固定、kind 只能是 deployment）就是在这里划出来的。
+    ToolSpec(
+        "patch_image", True,
+        "换指定容器的镜像（发布新版本用这个）；改完会读回确认是否真的生效，"
+        "要回滚用 rollout_history 查版本、再 rollout_undo_to",
+        _wobj(
+            {"namespace": _NS, "name": {"type": "string"},
+             "kind": _KIND,
+             "container": {"type": "string",
+                           "description": "容器名，省略则用名为 app 的容器（没有就用第一个）"},
+             "image": {"type": "string", "description": "新镜像，如 registry.example.com/app:v2"}},
+            ["namespace", "name", "image"],
+        ),
+        danger="caution",
+    ),
+    ToolSpec(
+        "patch_configmap", True,
+        "改 ConfigMap 的键值（可以新增/覆盖，也可以删键）；"
+        "改完**不会自动重启 Pod**，要生效还要配合 rollout_restart",
+        _wobj(
+            {"namespace": _NS, "name": {"type": "string", "description": "ConfigMap 名"},
+             "data": {"type": "object", "description": "要新增/覆盖的键值",
+                      "additionalProperties": {"type": "string"}},
+             "remove": {"type": "array", "items": {"type": "string"},
+                        "description": "要**删除**的键名列表（merge patch 删不掉 map 里的键，"
+                                       "带它时走 JSON patch）"}},
+            ["namespace", "name"],
+        ),
+        danger="caution",
+    ),
+    ToolSpec(
+        "rollout_undo_to", True,
+        "回滚到指定版本（revision 用 rollout_history 查）；"
+        "merge patch 滚不干净的字段会被如实报出来",
+        _wobj(
+            {"namespace": _NS, "name": {"type": "string"}, "kind": _KIND,
+             "revision": {"type": "integer",
+                          "description": "要回滚到的版本号，来自 rollout_history"}},
+            ["namespace", "name", "revision"],
+        ),
+        danger="caution",
+    ),
+    ToolSpec(
+        "canary_start", True,
+        "起金丝雀：把稳定版 Deployment 克隆成 <name>-canary 并只改镜像，"
+        "两个版本共用同一套标签，流量按**就绪副本数比例**灰度",
+        _wobj(
+            {"namespace": _NS, "name": {"type": "string", "description": "稳定版 Deployment 名"},
+             # 灰度是 Deployment 之间的对等关系，StatefulSet 没有"克隆一份"的语义
+             "kind": {"type": "string", "enum": ["deployment"], "description": "目前只支持 deployment"},
+             "image": {"type": "string", "description": "金丝雀版本要跑的镜像"},
+             "container": {"type": "string", "description": "改哪个容器的镜像，默认 app"},
+             "replicas": {"type": "integer", "description": "金丝雀副本数，至少 1"}},
+            ["namespace", "name", "image", "replicas"],
+        ),
+        danger="caution",
+    ),
+    ToolSpec(
+        "canary_promote", True,
+        "金丝雀转正：把 <name>-canary 的镜像发布到稳定版，并把金丝雀缩到 0 副本",
+        _wobj(
+            {"namespace": _NS, "name": {"type": "string", "description": "稳定版 Deployment 名"}},
+            ["namespace", "name"],
+        ),
+        danger="caution",
+    ),
+    ToolSpec(
+        "canary_abort", True,
+        "放弃金丝雀：把 <name>-canary 缩到 0 副本，稳定版一个字都不动",
+        _wobj(
+            {"namespace": _NS, "name": {"type": "string", "description": "稳定版 Deployment 名"}},
+            ["namespace", "name"],
+        ),
+        danger="normal",
     ),
 ]
 

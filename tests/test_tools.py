@@ -42,9 +42,23 @@ READ_FOR_WRITE: dict[str, set[str]] = {
     "patch_service_port": {"get_services"},
     "patch_probe": {"get_workload"},
     "patch_node_selector": {"get_workload", "get_nodes"},
+    # 变更管理。rollout_undo_to 的读工具**必须是 rollout_history**：
+    # 只有它能读出"有哪些版本"，没有它就指定不了回滚目标（get_replicasets 只列 RS，
+    # 没有版本与当前版本的对应关系）。
+    "patch_image": {"get_workload"},
+    "patch_configmap": {"get_configmap"},
+    "rollout_undo_to": {"rollout_history"},
+    # 金丝雀改的就是稳定版 Deployment 本身（以及那个由它派生的 <name>-canary），
+    # 所以读工具是 get_workload。
+    "canary_start": {"get_workload"},
+    "canary_promote": {"get_workload"},
+    "canary_abort": {"get_workload"},
     # 默认锁着的禁区工具。**解锁不等于不需要读**——恰恰相反：
     # 越是不可逆的动作，越要保证模型能先把对象读清楚再动手。
     "delete_pvc": {"get_pvc"},
+    # 容量与成本
+    "patch_resourcequota": {"get_resourcequota"},
+    "patch_pdb": {"get_pdb"},
 }
 
 
@@ -123,6 +137,23 @@ def test_每个写工具的参数里都有命名空间或节点():
     for name in WRITE_TOOLS:
         props = TOOLS[name].params
         assert "namespace" in props or "node" in props, f"{name} 没有 namespace/node 参数"
+
+
+def test_变更管理写工具都受命名空间白名单约束():
+    """新增写工具默认 fail closed（namespace_scoped=True），金丝雀那三个尤其不能豁免：
+    它们动的是生产工作负载，白名单是"能不能碰这个命名空间"的唯一一道硬约束。"""
+    for name in ("patch_image", "patch_configmap", "rollout_undo_to",
+                 "canary_start", "canary_promote", "canary_abort"):
+        assert TOOLS[name].namespace_scoped is True, f"{name} 绕过了命名空间白名单"
+
+
+def test_摘要不许写默认锁着这类话():
+    """踩过的坑：summary 里写"默认锁着/需要 --allow-tool 才能用"之后，
+    模型读到的是"这个工具现在是锁着的"，于是它看得见也不提卡片。
+    解锁方式属于给运维看的信息，不属于给模型看的工具描述。"""
+    for spec in TOOLS.values():
+        for bad in ("默认锁着", "默认锁住", "--allow-tool", "尚未开放"):
+            assert bad not in spec.summary, f"{spec.name} 的 summary 里写了 {bad!r}"
 
 
 def test_案例检索是只读工具():
@@ -204,6 +235,16 @@ TARGET_PARAMS: dict[str, dict] = {
     "patch_probe": {"namespace": "demo", "name": "api-gateway", "port": 8080},
     "patch_node_selector": {"namespace": "demo", "name": "api-gateway"},
     "delete_pvc": {"namespace": "demo", "name": "scratch-migration-temp"},
+    "patch_image": {"namespace": "demo", "name": "api-gateway", "image": "api-gateway:v2"},
+    "patch_configmap": {"namespace": "demo", "name": "app-config", "data": {"log_level": "debug"}},
+    "rollout_undo_to": {"namespace": "demo", "name": "api-gateway", "revision": 3},
+    "canary_start": {"namespace": "demo", "name": "api-gateway",
+                     "image": "api-gateway:v2", "replicas": 1},
+    "canary_promote": {"namespace": "demo", "name": "api-gateway"},
+    "canary_abort": {"namespace": "demo", "name": "api-gateway"},
+    "patch_resourcequota": {"namespace": "staging", "name": "staging-quota",
+                            "hard": {"requests.cpu": "8"}},
+    "patch_pdb": {"namespace": "demo", "name": "api-gateway-pdb", "min_available": 1},
 }
 
 # 明确期望的资源类型。**故意手写**，不是从代码里推出来的——
@@ -225,6 +266,15 @@ EXPECTED_KIND: dict[str, str] = {
     "patch_resources": "Deployment",
     "patch_probe": "Deployment",
     "patch_node_selector": "Deployment",
+    # 变更管理的写工具里，只有 patch_configmap 不是作用在工作负载上
+    "patch_configmap": "ConfigMap",
+    "patch_image": "Deployment",
+    "rollout_undo_to": "Deployment",
+    "canary_start": "Deployment",
+    "canary_promote": "Deployment",
+    "canary_abort": "Deployment",
+    "patch_resourcequota": "ResourceQuota",
+    "patch_pdb": "PodDisruptionBudget",
 }
 
 

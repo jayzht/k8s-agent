@@ -439,10 +439,15 @@ class OpsAgent:
         "delete_pod": ("Pod", "pod"),
         "delete_pvc": ("PersistentVolumeClaim", "name"),
         "rollback_configmap": ("ConfigMap", "name"),
+        # patch_configmap 改的也是 ConfigMap。不登记的话卡片会显示成
+        # "Deployment/app-config"——卡片刻错对象比没有卡片更糟，因为人以为自己看过了。
+        "patch_configmap": ("ConfigMap", "name"),
         "patch_hpa": ("HorizontalPodAutoscaler", "hpa"),
         "patch_hpa_target": ("HorizontalPodAutoscaler", "hpa"),
         "patch_service_selector": ("Service", "service"),
         "patch_service_port": ("Service", "service"),
+        "patch_resourcequota": ("ResourceQuota", "name"),
+        "patch_pdb": ("PodDisruptionBudget", "name"),
     }
 
     @staticmethod
@@ -491,6 +496,14 @@ class OpsAgent:
             "uncordon_node": "cordon_node 撤销",
             "drain_node": "uncordon_node 恢复调度；已驱逐的 Pod 由控制器重新调度",
             "rollback_configmap": "把 data 再改回当前值",
+            # 变更管理：回滚路径必须是"一步能说清"的，否则运维在事故里想不起来
+            "patch_image": "把 image 改回原值（get_workload 里有当前值），"
+                           "或用 rollout_history + rollout_undo_to 整体回退",
+            "patch_configmap": "把 data 改回当前值（get_configmap 里有当前值）",
+            "rollout_undo_to": "用 rollout_undo_to 再切回原来的 revision（rollout_history 可查）",
+            "canary_start": "canary_abort 把金丝雀缩到 0（稳定版不受影响）",
+            "canary_promote": "rollout_undo_to 回退到发布前的 revision",
+            "canary_abort": "canary_start 重新起一个金丝雀",
         }.get(tool, "无自动回滚")
 
     # ---------------------------------------------------------------- 影响面
@@ -501,6 +514,15 @@ class OpsAgent:
                 return analyse_node_impact(self.k8s, params.get("node", ""))
             if spec.name == "rollback_configmap":
                 return Impact()
+            if spec.name == "patch_configmap":
+                # ConfigMap 不是工作负载，硬套 analyse_workload_impact 只会得到一句
+                # "影响面分析失败"。影响面在这里恰恰是一句确定性的话，直接写出来。
+                imp = Impact()
+                imp.notes.append(
+                    "改 ConfigMap 不会重启任何 Pod：env/envFrom 注入的要 rollout_restart "
+                    "才会被读到；volume 挂载的由 kubelet 最终同步，进程不重载仍是旧值"
+                )
+                return imp
             kind = params.get("kind", "deployment")
             name = params.get("name") or target.name
             # scale 类操作必须按**目标**副本数算影响面：否则 3→1 和 3→10
@@ -508,9 +530,17 @@ class OpsAgent:
             target_replicas = None
             if spec.name == "scale_workload" and params.get("replicas") is not None:
                 target_replicas = int(params["replicas"])
-            return analyse_workload_impact(
+            imp = analyse_workload_impact(
                 self.k8s, target.namespace, kind, name, target_replicas=target_replicas
             )
+            if spec.name == "canary_start" and params.get("replicas") is not None:
+                # 卡片上必须写清"会**额外**多出几个副本"：灰度不改稳定版规格，
+                # 只看工作负载现状会让人以为"什么都没变"。
+                imp.notes.append(
+                    f"会额外创建 {int(params['replicas'])} 个金丝雀副本，与稳定版共用 selector，"
+                    f"流量按就绪副本数比例分配"
+                )
+            return imp
         except Exception as exc:  # noqa: BLE001
             imp = Impact()
             imp.notes.append(f"影响面分析失败：{exc}")

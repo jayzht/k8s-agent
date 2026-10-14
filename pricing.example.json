@@ -1,0 +1,29 @@
+{
+  "_README": [
+    "这是 get_cost 用的价格表**模板**，不是真实报价。",
+    "用法：把它复制成 var/pricing.json，然后把下面的数字换成你自己的单价。",
+    "",
+    "为什么需要人来填：本工具**不调用任何云厂商计费 API**，也不内置价格。",
+    "编一组'看起来像真的'单价塞进去，比不提供这个功能更糟——",
+    "运维会拿它去做容量决策，而那个数字是假的。",
+    "",
+    "单位：cpu_per_core 是【每核每小时】的价格，memory_per_gib 是【每 GiB 每小时】，",
+    "storage_per_gib 是【每 GiB 每小时】。填你账单上的等效单价即可。",
+    "计价口径是 requests（预留量），不是实际用量——预留才是你真正付钱的东西。"
+  ],
+  "currency": "CNY",
+  "unit": "hour",
+  "cpu_per_core": 0.12,
+  "memory_per_gib": 0.015,
+  "storage_per_gib": 0.0007,
+  "_overrides_README": [
+    "可选：按节点打不同单价（比如 GPU 节点、不同机型）。",
+    "键是节点名，值是要覆盖的字段；没列到的节点用上面的默认价。"
+  ],
+  "node_overrides": {
+    "om-sandbox-worker4": {
+      "cpu_per_core": 0.3,
+      "memory_per_gib": 0.04
+    }
+  }
+}

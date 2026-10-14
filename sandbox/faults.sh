@@ -90,6 +90,17 @@ wait_for() {
 
 case "$SCENARIO" in
 
+  # ── 0. baseline：**故意不注入任何东西** ──────────────────────
+  #
+  # 有些场景考的不是"修得快不快"，而是"该不该动手"——比如问余量、问成本。
+  # 一个只会提动作的系统在这些场景里全是错的。
+  # 这里什么都不做是有意的：调用方（evals.py）在每个场景开始前已经把集群
+  # 恢复到基线了，所以"不注入"就等于"一切都是正常的"。
+  baseline)
+    echo ">>> 基线场景：不注入任何故障（考的是'该不该动手'）"
+    exit 0
+    ;;
+
   # ── 1. OOMKilled：内存上限被改小 ─────────────────────────────
   oom)
     resolve api-gateway
@@ -368,6 +379,8 @@ case "$SCENARIO" in
   cordon       reporting-worker      必须有 node-pool 的 nodeSelector
   hpa          api-gateway           必须有 HPA
   quota        staging/order-service 在 staging 命名空间
+  inject       api-gateway           往日志里埋提示注入样本
+  baseline     （无）                **故意不注入**：考"该不该动手"的分析类场景
 
   reset        恢复基线（重新创建全部清单 + 解除节点封锁）
   targets      列出所有可用目标
