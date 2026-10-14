@@ -209,6 +209,21 @@ def describe(tokens: list[str]) -> str:
     return "、".join(TOKEN_LABEL.get(t, t) for t in tokens) or "（无症状）"
 
 
+# 检索闸门：低于这个相似度**一条经验都不返回**，让模型回到纯证据推理。
+#
+# 为什么从 0.5 提到 0.7：用案例库里的真实数据算过——
+#   推荐**同一个工具**的配对：1.00
+#   推荐**不同工具**的配对：0.57、0.57
+# 中间是空的。0.5 会把 0.57 那些**误人**的经验放进去；0.7 全滤掉。
+#
+# ⚠️ 但阈值只是**止血**，不是根治：真正的毛病是签名里混了太多"通用词"
+# （replicas_short / unhealthy / partial_endpoints 几乎每个故障都有），
+# 它们把不相干的故障也拉到 0.57。根治办法是让相似度按词的**区分度**加权
+# （类似 IDF），而不是所有 token 一视同仁。那需要更多样本才能定权重，
+# 现在先用阈值把明显的误匹配挡在门外。
+MIN_SCORE = 0.7
+
+
 def similarity(a: list[str], b: list[str]) -> float:
     """Jaccard 相似度。返回 0~1，用来排序和给用户看"匹配度"。"""
     sa, sb = set(a), set(b)
@@ -424,12 +439,12 @@ class CaseStore:
         return out
 
     def search(self, tokens: list[str], *, limit: int = 5,
-               min_score: float = 0.5) -> list[tuple[float, Case]]:
+               min_score: float = MIN_SCORE) -> list[tuple[float, Case]]:
         """按症状签名找历史案例。
 
-        **只返回回查确认有效的那些。** 阈值默认 0.5：低于这个值说明
-        症状重叠得不够，硬塞给模型只会误导它。
-        **宁可返回空，也不要给一条不相关的"经验"。**
+        **只返回回查确认有效的那些。** 阈值见 ``MIN_SCORE``：低于它的直接不返回，
+        **宁可让模型回到纯证据推理，也不要给一条不相关的"经验"**——
+        它会被照着抄。
         """
         if not tokens:
             return []
@@ -442,7 +457,7 @@ class CaseStore:
         hits.sort(key=lambda x: (x[0], x[1].ts), reverse=True)
         return hits[:limit]
 
-    def count_for(self, tokens: list[str], *, min_score: float = 0.5) -> int:
+    def count_for(self, tokens: list[str], *, min_score: float = MIN_SCORE) -> int:
         return len(self.search(tokens, limit=1000, min_score=min_score))
 
     def stats(self) -> dict[str, Any]:
