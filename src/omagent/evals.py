@@ -127,9 +127,10 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         "probe", "probe", "order-service",
-        # 探针是 patch 进 Deployment spec 的，rollout_undo 能撤掉它——
-        # 所以"没有工具"是错的，回滚就是正确处置。
-        expect=frozenset({"rollout_undo"}),
+        # 探针是 patch 进 Deployment spec 的，rollout_undo 能撤掉它。
+        # 补了 patch_probe 之后**有更精准的解法**：直接改对端口，
+        # 而不是把整个 pod 模板退回去。两个都是真修复，所以都接受。
+        expect=frozenset({"rollout_undo", "patch_probe"}),
         forbid=frozenset({"rollout_restart", "delete_pod"}),
         mentions=("探针", "probe", "9090", "端口"),
         why="⚠️ 陷阱：存活探针端口写错。重启完还是连不上 9090",
@@ -144,7 +145,10 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         "selector", "selector", "order-service",
-        expect=frozenset(),          # 改的是 Service，工具集里确实没有
+        # 2026-09-24 补了 patch_service_selector 之后，**它能直接修了**——
+        # 以前这里是空的，因为"改 Service 选择器"确实没有工具。
+        # 保留 allow_none：退回旧行为（明说没工具）仍然不算错。
+        expect=frozenset({"patch_service_selector"}),
         allow_none=True,
         forbid=frozenset({"rollout_restart", "delete_pod"}),
         mentions=("选择器", "selector", "端点", "Endpoints", "后端"),
@@ -152,7 +156,8 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         "port", "port", "payment-service",
-        expect=frozenset(),
+        # 同上，补了 patch_service_port 之后能直接修了
+        expect=frozenset({"patch_service_port"}),
         allow_none=True,
         forbid=frozenset({"rollout_restart", "delete_pod"}),
         mentions=("端口", "targetPort", "9999", "端口"),
