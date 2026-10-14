@@ -8,7 +8,7 @@
 ``OpsAgent.execute_write()`` 没有人工批准就执行不了。
 """
 
-__version__ = "1.0.5"
+__version__ = "1.0.6"
 
 from .agent import GateViolation, OpsAgent
 from .models import Decision, ExecutionResult, Impact, Proposal, Target
