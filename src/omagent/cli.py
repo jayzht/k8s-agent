@@ -15,6 +15,7 @@ import argparse
 import getpass
 import sys
 from pathlib import Path
+from typing import Any, Callable
 
 from .config import ROOT, ensure_local_bypass, load_env_file, llm_status
 from .tools import (
@@ -134,11 +135,66 @@ def cmd_userdel(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_eval(args: argparse.Namespace) -> int:
-    """跑诊断质量评测。**会真调模型、真改集群。**"""
+def make_eval_agent_factory(
+    args: argparse.Namespace,
+    kubeconfig: str | None = None,
+    *,
+    k8s_factory: Callable[[], Any] | None = None,
+    audit_path: str | Path | None = None,
+    cases_path: str | Path | None = None,
+) -> Callable[[], Any]:
+    """造评测用的 agent 工厂。
+
+    ⚠️ **和 serve 共用同一套 provider 装配逻辑**（``_build_providers``）。
+
+    以前这里**没传 ``providers=``**，于是全部剧本是在"Prometheus / Loki /
+    变更历史全关掉"的配置下跑的——**评测测的根本不是真实配置**。
+    而"依赖变慢"这一类故障恰恰只有指标/日志能定位，所以那个数字对不上线。
+
+    复制一份装配逻辑是不行的：两份迟早漂移，而"评测跑的配置"和"线上跑的
+    配置"必须是同一个。所以这里直接复用 ``_build_providers``，
+    参数也复用 ``_add_provider_args``。
+    """
     from .agent import WRITE_NAMESPACES, OpsAgent
     from .audit import AuditLog
     from .cases import CaseStore
+    from .k8s import K8sClient
+
+    make_k8s = k8s_factory or (lambda: K8sClient(kubeconfig=kubeconfig))
+    audit = Path(audit_path) if audit_path else (ROOT / "var" / "eval-audit.jsonl")
+    cases = Path(cases_path) if cases_path else (ROOT / "var" / "eval-cases.jsonl")
+
+    def agent_factory() -> OpsAgent:
+        k8s = make_k8s()
+        return OpsAgent(
+            k8s,
+            AuditLog(audit),
+            operator="eval",
+            write_namespaces=WRITE_NAMESPACES,
+            cases=CaseStore(cases, runbooks=ROOT / "runbooks.jsonl"),
+            # 默认接上 Prometheus / Loki / 变更历史（= 真实配置）；
+            # 想对比"有无数据源的差异"用 --no-observability 显式关。
+            providers=_build_providers(k8s, args),
+        )
+
+    return agent_factory
+
+
+def _print_providers(registry) -> None:
+    """把"这次评测到底接上了哪些数据源"打出来。
+
+    不打印的话，"这批数字是在什么配置下跑的"又变成一个只能靠命令行历史
+    回答的问题——而"评测跑的是真实配置"恰恰是这次要钉住的事。
+    """
+    for p in registry.status():
+        if p["available"]:
+            print(f"  数据源：{p['name']}（{p['tools']} 个只读工具）")
+        else:
+            print(f"  数据源：{p['name']} 不可用 — {p['reason'][:70]}")
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    """跑诊断质量评测。**会真调模型、真改集群。**"""
     from .evals import SCENARIOS, dump, render, run, select
     from .k8s import K8sClient
     from .llm import LLMClient
@@ -165,20 +221,16 @@ def cmd_eval(args: argparse.Namespace) -> int:
     if not llm.available:
         raise SystemExit("✗ 没配置模型 API Key，评测跑不了（评测必须用真模型）")
 
-    # 案例库单独一份：评测不该污染真实积累的经验
-    eval_cases = ROOT / "var" / "eval-cases.jsonl"
-
-    def agent_factory() -> OpsAgent:
-        return OpsAgent(
-            K8sClient(kubeconfig=kubeconfig),
-            AuditLog(ROOT / "var" / "eval-audit.jsonl"),
-            operator="eval",
-            write_namespaces=WRITE_NAMESPACES,
-            cases=CaseStore(eval_cases, runbooks=ROOT / "runbooks.jsonl"),
-        )
+    agent_factory = make_eval_agent_factory(args, kubeconfig)
 
     print(f"评测 {len(scenarios)} 个剧本 × {args.repeat} 次，用真模型真集群。")
     print(f"模型：{llm.model} ｜ 每个剧本开始前恢复基线，结束后再恢复一次。")
+    # 先探一次数据源，把配置说在数字前面。
+    try:
+        _print_providers(_build_providers(K8sClient(kubeconfig=kubeconfig), args))
+    except Exception as exc:  # noqa: BLE001
+        # 探不到不该拦住评测：provider 连不上是功能降级（注册表会跳过）。
+        print(f"  数据源：探测失败 — {type(exc).__name__}: {str(exc)[:70]}")
     print("⚠️ 期间请不要同时操作演示集群。\n")
 
     report = run(scenarios,
@@ -676,11 +728,20 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--settle", type=float, default=20.0, help="注入故障后等多少秒让它显现")
     ev.add_argument("--model", default=None)
     ev.add_argument("--kubeconfig", default=None)
+    ev.add_argument("--namespace", default="demo",
+                    help="provider（Prometheus / Loki 之外的变更历史）默认命名空间；"
+                         "剧本各自的命名空间不受影响")
     ev.add_argument("--out", default=None, help="结果 JSON 写到哪")
     ev.add_argument("--rescore", default=None,
                     help="用当前预期重判一份已有报告（不重跑模型）")
     ev.add_argument("--min-pass", type=float, default=None,
                     help="通过率低于这个值就以非零码退出（给 CI 用）")
+    # ⚠️ provider 参数**和 serve 是同一套定义**（同一个 _add_provider_args）：
+    #    --obs-namespace / --prometheus-url / --loki-url / --no-observability。
+    #    默认是**接上**（评测要测真实配置），--no-observability 只是留一个
+    #    "显式关掉"的开关，用来对比有无数据源的差异。
+    #    在这里另写一份参数迟早和 serve 漂移，所以直接复用。
+    _add_provider_args(ev)
     ev.set_defaults(func=cmd_eval)
 
     ca = sub.add_parser("cases", help="查看案例库（语义记忆）")

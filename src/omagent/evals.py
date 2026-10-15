@@ -442,11 +442,17 @@ SCENARIOS: tuple[Scenario, ...] = (
         expect=frozenset(),
         allow_none=True,
         forbid=frozenset({"rollout_restart"}),
-        mentions=("chaos", "Chaos", "网络", "延迟", "NetworkChaos", "下游"),
+        # ⚠️ 原来的 mentions 里写着「下游」——那是照着**泄题的题干**
+        # （"order-service 访问 postgres"）写的，等于把拓扑关系白送给模型。
+        # 题干去掉两个服务名之后，这里只留**真正的根因词**。
+        mentions=("chaos", "Chaos", "NetworkChaos", "网络", "延迟", "注入", "实验"),
         injector="chaos",
-        # 题干给的是**症状**（慢），不是根因。真实值班里人只会说"慢"，
-        # 而"慢"恰恰是这一类故障最难查的地方——没有任何对象是坏的。
-        ask="order-service 访问 postgres 最近变得特别慢，经常超时，"
+        # 题干给的是**用户视角的症状**（慢），不是根因，也**不点名任何服务**：
+        #   点的是用户看到的入口（下单页面），不是出问题的那个服务；
+        #   更不能出现注入目标（order-service）和它的对端（postgres）。
+        # 真实值班里人只会说"页面慢"，而"慢"恰恰是这一类故障最难查的地方——
+        # 没有任何对象是坏的，只有事件/指标能看出来。
+        ask="有用户反馈下单页面最近特别慢、经常转圈，有时候干脆没反应。"
             "帮我查清楚原因并给出处置方案。",
         why="⚠️ 运行时故障：NetworkChaos 给 order-service→postgres 注入延迟。"
             "工作负载 spec 没变，重启/删 Pod 都撤不掉实验对象；"
@@ -460,9 +466,10 @@ SCENARIOS: tuple[Scenario, ...] = (
         expect=frozenset(),
         allow_none=True,
         forbid=frozenset({"rollout_restart"}),
-        mentions=("chaos", "Chaos", "网络", "分区", "NetworkChaos", "不通", "断"),
+        mentions=("chaos", "Chaos", "NetworkChaos", "网络", "分区", "丢包", "不通", "注入"),
         injector="chaos",
-        ask="order-service 连不上 postgres 了，业务请求大量失败，"
+        # 同上：用户视角的"打不开 / 提交失败"，不点名 order-service，也不点名 postgres。
+        ask="有用户反馈下单页面打不开了，提交订单大量失败、一直报错。"
             "帮我查清楚原因并给出处置方案。",
         why="⚠️ 运行时故障：NetworkChaos partition 切断 order-service↔postgres。"
             "Service/Endpoints/探针全正常，但包过不去；"
@@ -493,9 +500,11 @@ SCENARIOS: tuple[Scenario, ...] = (
         #
         # 这条**保留为已知失败**：不为了让数字好看去放宽它。
         forbid=frozenset({"rollout_restart", "patch_resources"}),
-        mentions=("chaos", "Chaos", "CPU", "StressChaos", "打满", "限额"),
+        mentions=("chaos", "Chaos", "StressChaos", "CPU", "打满", "注入", "实验"),
         injector="chaos",
-        ask="api-gateway 最近响应明显变慢，有时候还会超时，"
+        # 题干同样**不点名任何服务**：点的是用户看到的"整个商城"，
+        # 不是被打了 CPU 的 api-gateway。否则等于把注入目标直接告诉模型。
+        ask="有用户反馈整个商城最近响应明显变慢，有时候还会超时打不开。"
             "帮我查清楚原因并给出处置方案。",
         why="⚠️ 运行时故障：StressChaos 把 api-gateway 的 CPU 打到限额（~200m），"
             "HPA 因此扩容。spec 里 limits 没变（其它服务同样是 200m 却只用 2m），"
