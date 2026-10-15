@@ -377,6 +377,169 @@ def test_故障注入的目标名有字符白名单(server):
     assert "非法的目标名称" in body["error"]
 
 
+# ── Chaos Mesh：第二套注入器必须能在页面上点到 ────────────────────────────
+#
+# 背景：`sandbox/chaos.sh` 是第二条注入路径（Chaos Mesh，运行时故障），但它
+# 一开始只能从 CLI / evals 用——菜单是 web.py 里另一份硬编码的剧本表，而且
+# 只调 faults.sh，页面上点不到。
+#
+# 这一组守住四件事：
+#   1. 菜单里能看见 chaos 场景，而且**一眼能看出是另一套注入器**（分组不同）；
+#   2. inject_fault 按场景路由到正确脚本（打桩，绝不真注入）；
+#   3. 没开 --demo 时照样拒绝（安全边界不能被新代码破坏）；
+#   4. 「恢复基线」必须**同时**清两套——只清 faults 带不走 NetworkChaos。
+#
+# 打桩的都要真跑一下 argv 拼装和 env，所以比只测菜单更有价值。
+
+CHAOS_SCENARIOS = ("podkill", "network-partition", "network-delay",
+                   "stress-cpu", "dns-error")
+
+
+def _sandbox_app(tmp_path, *, demo_mode: bool = True) -> App:
+    """不经过 HTTP 直接调 App 方法时用的最小 App（和 server fixture 同构）。"""
+    return App(
+        _FakeAgent(),  # type: ignore[arg-type]
+        AuditLog(tmp_path / "audit.jsonl"),
+        llm=None,  # type: ignore[arg-type]
+        operator="tester",
+        default_namespace="demo",
+        demo_mode=demo_mode,
+        secret=b"",
+        session_dir=tmp_path / "sessions",
+    )
+
+
+class _StubRun:
+    """subprocess.run 的替身：只记录调用，不碰集群。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str], dict]] = []
+
+    def __call__(self, argv, **kw):
+        self.calls.append((list(argv), kw.get("env") or {}))
+
+        class _R:
+            returncode = 0
+            stdout = "stub ok"
+            stderr = ""
+
+        return _R()
+
+    @property
+    def scripts(self) -> list[str]:
+        return [Path(argv[1]).name for argv, _ in self.calls]
+
+
+def test_菜单把_chaos_场景单独分组_能看出是另一套注入器(server):
+    base, _ = server
+    c = Client(base)
+    c.login("zhang.wei", "ops-pass-2026")
+    code, status = c.get("/api/status")
+    assert code == 200
+    menu = {s["name"]: s for s in status["scenarios"]}
+
+    for name in CHAOS_SCENARIOS:
+        assert name in menu, f"{name} 没进菜单——chaos 场景在页面上点不到"
+        assert menu[name]["injector"] == "chaos", f"{name} 的注入器标错了"
+        assert menu[name]["needs"] == "workload", "chaos 场景都能选任意工作负载"
+
+    # 原来的场景一个都不能少，也不能被误标成 chaos
+    for name in ("oom", "selector", "probe", "hpa", "inject"):
+        assert menu[name]["injector"] == "faults", f"{name} 被误标成了别的注入器"
+
+    # 分组区分：前端就是按 group 分块渲染的，两组必须分开且名字点明 Chaos
+    chaos_groups = {menu[n]["group"] for n in CHAOS_SCENARIOS}
+    assert len(chaos_groups) == 1, "chaos 场景应该在一组里"
+    chaos_group = chaos_groups.pop()
+    assert "Chaos" in chaos_group, chaos_group
+    assert menu["oom"]["group"] != chaos_group
+    assert menu["inject"]["group"] != chaos_group
+
+    # 目标按各场景**真实要求**填，不是照抄 faults.sh 的默认值
+    assert menu["podkill"]["default"] == "cart-service"
+    assert menu["network-partition"]["default"] == "order-service"
+    assert menu["network-delay"]["default"] == "order-service"
+    assert menu["stress-cpu"]["default"] == "api-gateway"
+    assert menu["dns-error"]["default"] == "order-service"
+
+
+def test_菜单里的_chaos_场景名_chaos_脚本真的认识():
+    """菜单点下去会把场景名原样当 argv 传给脚本——名字对不上就是一记报错。"""
+    import subprocess
+
+    from omagent.config import ROOT
+
+    r = subprocess.run(["bash", str(ROOT / "sandbox" / "chaos.sh"), "list"],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    for name in CHAOS_SCENARIOS:
+        assert name in r.stdout, f"chaos.sh 不认识菜单里的场景 {name}"
+
+
+def test_菜单里每个场景的注入器都是已知的():
+    from omagent.evals import INJECTORS
+
+    for sc in App.SANDBOX_SCENARIOS:
+        inj = sc.get("injector", "faults")
+        assert inj in INJECTORS or inj == "all", f"{sc['name']} 的 injector={inj!r}"
+
+
+def test_inject_fault_按场景路由到正确的脚本(tmp_path, monkeypatch):
+    app = _sandbox_app(tmp_path)
+    stub = _StubRun()
+    monkeypatch.setattr("subprocess.run", stub)
+
+    app.inject_fault("network-delay", "order-service")   # chaos
+    app.inject_fault("oom")                              # faults，用场景默认目标
+    app.inject_fault("stress-cpu", "")                   # chaos
+
+    assert stub.scripts == ["chaos.sh", "faults.sh", "chaos.sh"], stub.scripts
+    assert [argv[2] for argv, _ in stub.calls] == \
+        ["network-delay", "oom", "stress-cpu"]
+    # 指定的目标要附加在 argv 末尾；没给就不追加（让脚本用自己的默认值）
+    assert stub.calls[0][0][3] == "order-service"
+    assert stub.calls[1][0][2:] == ["oom"]
+    # 命名空间仍然通过 OM_NS 传给脚本，且默认走当前命名空间
+    assert stub.calls[0][1]["OM_NS"] == "demo"
+
+    out = app.inject_fault("dns-error")
+    assert out["injector"] == "chaos" and out["ok"] is True
+
+
+def test_未开_demo_时_chaos_场景同样拒绝注入(tmp_path, monkeypatch):
+    """安全边界：新加的注入器绝不能绕过 --demo 开关。"""
+    from omagent.agent import GateViolation
+
+    app = _sandbox_app(tmp_path, demo_mode=False)
+
+    def _explode(*_a, **_k):
+        raise AssertionError("没开 --demo 竟然真的去注入了")
+
+    monkeypatch.setattr("subprocess.run", _explode)
+    for name in ("oom", *CHAOS_SCENARIOS, "reset"):
+        with pytest.raises(GateViolation) as ei:
+            app.inject_fault(name)
+        assert "演示模式" in str(ei.value)
+    # 菜单也不下发：没开 --demo 时前端根本不该渲染出按钮
+    assert app.scenario_menu() == []
+
+
+def test_恢复基线必须同时清两套_且_chaos_在前(tmp_path, monkeypatch):
+    """只清 faults 带不走 NetworkChaos/Schedule——残留实验会让下个场景随机失败。"""
+    app = _sandbox_app(tmp_path)
+    stub = _StubRun()
+    monkeypatch.setattr("subprocess.run", stub)
+
+    out = app.inject_fault("reset")
+
+    assert [(Path(a[1]).name, a[2]) for a, _ in stub.calls] == \
+        [("chaos.sh", "reset"), ("faults.sh", "reset")], \
+        "恢复基线必须两套都清，而且 Chaos 在前（顺序和 evals.reset_baseline 一致）"
+    assert out["ok"] is True and out["injector"] == "all"
+    assert "chaos reset" in out["output"]
+    assert "faults reset" in out["output"]
+
+
 # ── 其它 ──────────────────────────────────────────────────────────────────
 
 

@@ -62,6 +62,43 @@ FAULTS = ROOT / "sandbox" / "faults.sh"
 # 和 FAULTS 并行存在，互不干扰——`faults.sh` 那 22 个剧本的调用路径一个字没动。
 CHAOS = ROOT / "sandbox" / "chaos.sh"
 
+# 注入器名 → 脚本。**这是唯一的一张表**：命令行评测（``Scenario.injector``）
+# 和 Web 界面（``web.App.SANDBOX_SCENARIOS`` 的 injector 字段）都从这里取脚本。
+# 两边各写一份映射的话，迟早出现"评测清了 Chaos、界面没清"这类漂移。
+INJECTORS: dict[str, Path] = {"faults": FAULTS, "chaos": CHAOS}
+
+# 恢复基线时要清的注入器，**顺序不能反**：
+# Chaos 对象独立于工作负载，`faults.sh reset` 删掉 Pod 再重建带不走它们；
+# 先恢复 faults 的话，重建出来的 Pod 会立刻被上一个场景残留的实验选中。
+RESET_ORDER: tuple[str, ...] = ("chaos", "faults")
+
+
+def reset_baseline(*, env: dict[str, str] | None = None,
+                   timeout: int = 1200) -> list[dict[str, Any]]:
+    """把两套注入器的故障都清掉（Chaos 先、faults 后），返回每一步的结果。
+
+    Web 界面的「恢复基线」和命令行评测的 ``_reset()`` 都走这里。理由和顺序
+    见 ``RESET_ORDER``：**只清 faults 是不够的**，残留的 NetworkChaos /
+    StressChaos / Schedule 会让下一个场景莫名其妙地失败。
+
+    ``env`` 给 Web 层传 PATH / KUBECONFIG / OM_NS；评测不传，脚本自己解析。
+    脚本不存在就跳过（比如精简部署里没有 chaos.sh），不要让恢复本身挂掉。
+    """
+    out: list[dict[str, Any]] = []
+    for name in RESET_ORDER:
+        script = INJECTORS[name]
+        if not script.exists():
+            continue
+        try:
+            r = subprocess.run(["bash", str(script), "reset"], cwd=ROOT,
+                               capture_output=True, text=True, timeout=timeout,
+                               env=env)
+            out.append({"injector": name, "exit": r.returncode,
+                        "output": (r.stdout or "") + (r.stderr or "")})
+        except subprocess.TimeoutExpired as exc:
+            out.append({"injector": name, "exit": -1, "output": f"超时：{exc}"})
+    return out
+
 
 @dataclass
 class Scenario:
@@ -91,6 +128,7 @@ class Scenario:
     ask: str = ""
     # 用哪个注入器。`"faults"`（默认）= sandbox/faults.sh（改 K8s 对象）；
     # `"chaos"` = sandbox/chaos.sh（Chaos Mesh，改运行时）。
+    # 取值必须出现在上面 ``INJECTORS`` 里——Web 菜单用的是**同一套取值**。
     # ⚠️ 默认值必须是 "faults"：现有 22 个剧本一个都没写这个字段，
     #    默认值一变就会把它们全部打乱。
     injector: str = "faults"
@@ -515,23 +553,19 @@ class Outcome:
 def _run_fault(scenario: Scenario) -> None:
     """只负责注入。恢复基线由调用方在跑完之后统一做一次——
     每个场景前后各 reset 一次会让总时长翻倍，而每个场景结束后的那次已经够了。"""
-    script = CHAOS if scenario.injector == "chaos" else FAULTS
+    script = INJECTORS.get(scenario.injector, FAULTS)
     subprocess.run(["bash", str(script), scenario.fault, scenario.target],
                    cwd=ROOT, capture_output=True, text=True, timeout=900)
 
 
 def _reset() -> None:
-    # ⚠️ Chaos 对象必须**单独**清一遍。
+    # ⚠️ Chaos 对象必须**单独**清一遍（``reset_baseline`` 里先清 chaos 再清 faults）。
     # `faults.sh reset` 是"删掉工作负载再重建"，而 NetworkChaos / StressChaos
     # 是**独立于工作负载**的对象：删 Pod 带不走它们，重建出来的 Pod 会立刻
     # 被上一个场景残留的实验选中。上一次实验的延迟/分区会原样叠加到下一个
-    # 场景上，结果就是随机失败而且极难归因。所以这里先清 Chaos，再恢复基线。
-    # Chaos 没装时 chaos.sh reset 会自己识别并直接返回，不会让评测挂掉。
-    if CHAOS.exists():
-        subprocess.run(["bash", str(CHAOS), "reset"], cwd=ROOT,
-                       capture_output=True, text=True, timeout=600)
-    subprocess.run(["bash", str(FAULTS), "reset"], cwd=ROOT,
-                   capture_output=True, text=True, timeout=1200)
+    # 场景上，结果就是随机失败而且极难归因。
+    # 顺序和实现都在 ``reset_baseline`` 里，和 Web 的「恢复基线」共用同一份。
+    reset_baseline()
 
 
 def evaluate_one(
