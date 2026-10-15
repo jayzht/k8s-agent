@@ -26,7 +26,7 @@ import pytest
 
 from omagent.audit import AuditLog
 from omagent.auth import ROLE_OPERATOR, ROLE_VIEWER, UserStore, load_secret
-from omagent.web import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, App, Handler
+from omagent.web import CHAT_SESSION_TTL, COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, App, Handler
 
 from .fakes import FakeConsoleK8s
 
@@ -909,3 +909,77 @@ def test_跳过的外部工具要能被界面解释():
     assert st[0]["tools"] == 1
     assert st[0]["skipped"][0][0] == "write_file"
     assert "白名单" in st[0]["skipped"][0][1]
+
+
+# ── 会话回收：必须按"最后活跃时间"，且绝不回收正在跑的 ─────────────────────
+#
+# 真实事故：回收用的是 `created_at`（会话创建时间）。于是**任何超过 TTL 的老会话，
+# 每次 API 调用都会先被踢出内存、再从磁盘重新加载**。而加载时如果磁盘上记的状态是
+# `thinking`（排查正在跑），就会补一条"服务重启过"并把状态改成 idle——
+# 那个正在跑的后台线程连同输出一起丢了。
+#
+# 用户看到的是：发消息 → 工具跑起来 → 下一次轮询就"服务重启过，上一轮排查被打断了"，
+# 反复如此，看起来像"服务一直在重启"，其实服务好好的。
+
+
+def _mk_app(tmp_path):
+    users = UserStore(tmp_path / "users.json")
+    users.add("zhang.wei", "ops-pass-2026", ROLE_OPERATOR)
+    users.save()
+    return App(
+        _FakeAgent(),  # type: ignore[arg-type]
+        AuditLog(tmp_path / "audit.jsonl"),
+        llm=None,  # type: ignore[arg-type]
+        operator="tester",
+        default_namespace="demo",
+        demo_mode=True,
+        users=users,
+        secret=load_secret(tmp_path / "secret.key"),
+        session_dir=tmp_path / "sessions",
+    )
+
+
+def test_老会话只要还在用就不会被回收(tmp_path):
+    """建了 10 小时的会话，只要"刚刚还在用"，就必须留在内存里。
+
+    以前按 created_at 算，这种会话**每次请求都会被换一个新对象**。
+    """
+    import time as _t
+
+    app = _mk_app(tmp_path)
+    sess = app.session("s-old", create=True, namespace="demo")
+    sess.created_at = _t.time() - 10 * 3600   # 10 小时前建的
+    sess.last_active = _t.time()              # 但刚刚还在用
+
+    again = app.session("s-old")
+    assert again is sess, "老会话被换掉了——按创建时间回收会这样"
+
+
+def test_真的没人用了才回收(tmp_path):
+    import time as _t
+
+    app = _mk_app(tmp_path)
+    sess = app.session("s-idle", create=True, namespace="demo")
+    sess.last_active = _t.time() - (CHAT_SESSION_TTL + 60)
+
+    app._reap_locked()
+    assert "s-idle" not in app._sessions, "超过 TTL 且没人用，应该被回收"
+
+
+def test_正在跑的会话绝不回收(tmp_path):
+    """**这条是关键。** 一轮排查可能很久没有新事件（在等模型），
+    光靠活跃时间不够——对象被换掉，后台线程的输出就再也收不回来了。"""
+    import time as _t
+
+    app = _mk_app(tmp_path)
+    sess = app.session("s-busy", create=True, namespace="demo")
+    sess.created_at = _t.time() - 10 * 3600
+    sess.last_active = _t.time() - (CHAT_SESSION_TTL + 60)
+    sess.status = "thinking"
+
+    app._reap_locked()
+    assert "s-busy" in app._sessions, "正在排查的会话被回收了，它的输出会丢"
+
+    sess.status = "awaiting_approval"
+    app._reap_locked()
+    assert "s-busy" in app._sessions, "等批准的会话同样不能回收"

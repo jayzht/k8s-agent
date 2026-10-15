@@ -510,8 +510,27 @@ class App:
         return ok
 
     def _reap_locked(self) -> None:
+        """把长时间没用的会话从内存里放掉（磁盘上还有）。
+
+        ⚠️ 这里有两个坑，都是真实踩过的：
+
+        1. **必须按"最后活跃时间"算，不能按 `created_at`。**
+           以前用的是创建时间，于是**任何超过 TTL 的老会话，每次 API 调用
+           都会先被踢出内存、再从磁盘重新加载一遍**。而加载时如果磁盘上记的
+           状态是 `thinking`（排查正在跑），就会补一条"服务重启过"并把状态改成
+           idle——那个**正在跑的后台线程连同它的输出一起被丢掉了**。
+           用户看到的现象是：发一条消息 → 工具跑起来了 → 下一次轮询就
+           "服务重启过，上一轮排查被打断了"，排查白跑一轮，反复如此。
+
+        2. **正在跑的会话绝不回收**（`busy`）。它的输出还在后台线程里陆续到达，
+           对象被换掉就再也收不回来了。光靠活跃时间不够——一轮排查可能很久
+           没有新事件（比如在等模型）。
+        """
         now = time.time()
-        stale = [k for k, s in self._sessions.items() if now - s.created_at > CHAT_SESSION_TTL]
+        stale = [
+            k for k, s in self._sessions.items()
+            if not s.busy and now - s.last_active > CHAT_SESSION_TTL
+        ]
         for k in stale:
             self._sessions.pop(k, None)
 

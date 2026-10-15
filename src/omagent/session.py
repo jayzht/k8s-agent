@@ -351,6 +351,11 @@ class ChatSession:
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         self.created_at = time.time()
 
+        # 最后活跃时间。**回收必须按它算，不能按 created_at**——
+        # 见 web._reap_locked 里那段说明：按创建时间回收会让一个跑了很久的
+        # 会话在**正在排查的时候**被踢出内存，正在跑的后台线程连同它的输出
+        # 一起丢掉，用户看到的是"排查到一半突然说服务重启过"。
+        self.last_active = time.time()
         self._pending_calls: list[ToolCall] = []
         self._seq = 0
         self._nudged = False   # 本轮是否已经因为"用文字征求同意"提醒过
@@ -381,6 +386,7 @@ class ChatSession:
     def _emit(self, etype: str, **data: Any) -> Event:
         with self._lock:
             self._dirty = True
+            self.last_active = time.time()
             self._seq += 1
             ev = Event(seq=self._seq, type=etype, data=data)
             self.events.append(ev)
@@ -388,6 +394,10 @@ class ChatSession:
             if len(self.events) > 500:
                 del self.events[: len(self.events) - 500]
             return ev
+
+    def touch(self) -> None:
+        """标记这个会话刚刚被用过。回收策略按它判断。"""
+        self.last_active = time.time()
 
     def events_since(self, since: int) -> list[dict[str, Any]]:
         with self._lock:
@@ -503,6 +513,8 @@ class ChatSession:
             for k in sess.usage:
                 sess.usage[k] = int(usage.get(k) or 0)
             sess.created_at = float(data.get("created_at") or time.time())
+            # 刚从磁盘加载 = 现在正被使用，不能一加载就被判成过期
+            sess.last_active = time.time()
             sess.injections = list(data.get("injections") or [])
             pend = data.get("pending")
             if pend:
