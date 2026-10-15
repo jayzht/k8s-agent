@@ -518,8 +518,19 @@ class ChatSession:
                 sess.status = "idle"
             else:
                 sess.status = was if was in ("idle", "error", "awaiting_approval") else "idle"
-            # awaiting_approval 但方案已经不在了（过期被清过）→ 退回 idle
-            if sess.status == "awaiting_approval" and sess.pending is None:
+            if sess.pending is not None:
+                # 磁盘上记的可能是 "thinking"（服务是在跑的时候被杀掉的），
+                # 但**只要有活着的待批方案，会话的真实状态就是"等批准"**。
+                #
+                # 不这样修的话会出现两条路径同时补同一条 tool_call 的结果：
+                # 恢复时判成"上一轮被打断"→ 补一条"没执行完"；
+                # 之后人再点批准/拒绝 → resolve_approval 又补一条 →
+                # **同一个 tool_call_id 两条 tool 结果** → API 400
+                # （"tool must be a response to a preceding message with tool_calls"）。
+                # 这个错真实发生过，会话直接卡死、发什么都报 400。
+                sess.status = "awaiting_approval"
+            elif sess.status == "awaiting_approval":
+                # 状态说在等批准，但方案已经不在了（过期被清过）→ 退回 idle
                 sess.status = "idle"
 
             # 本回合没处理完的工具调用。**这段历史天然是不合法的**：
@@ -539,15 +550,15 @@ class ChatSession:
             if restored and sess.status == "awaiting_approval":
                 # 排在后面的 sibling 还等着被处理：恢复出来，交给批准之后的
                 # 排空逻辑。那一刻补的结果仍然紧跟着 assistant，顺序合法。
-                #
-                # 这种情况**不能**走下面的补齐：写操作自己也还没有 tool 结果,
-                # 那条要等 resolve_approval 来填；现在补一条就成了重复结果。
                 sess._pending_calls = restored
-            else:
-                # 上一轮排查被重启打断：不重放这些读操作——集群状态可能早变了，
-                # 把旧的读取结果补回去才是误导。只补一条"没执行完"的结果，
-                # 把历史的**格式**补合法。
-                sess.repair_orphan_tool_calls()
+
+            # 无论走哪条分支，都过一遍**协议修复**（见 repair_orphan_tool_calls）：
+            #   · 缺结果的补一条"没执行完"
+            #   · 重复的、找不到归属的 tool 消息剔掉
+            # 唯一不能碰的是**还挂在待批方案上**的那条——它的结果由
+            # resolve_approval 来填，这里补了就会变成两条。
+            live = {sess.pending.call_id} if sess.pending is not None else set()
+            sess.repair_orphan_tool_calls(skip=live)
         return sess
 
     # ------------------------------------------------------------------ 入口
@@ -914,53 +925,72 @@ class ChatSession:
             }
         )
 
-    def repair_orphan_tool_calls(self) -> int:
-        """给"等不到结果"的 tool_call 补一条中断说明，让历史重新合法。
+    def repair_orphan_tool_calls(self, skip: set[str] | None = None) -> int:
+        """把消息历史修回**协议合法**的形态，返回改动了几条。
 
-        **以消息历史为准，而不是以 ``_pending_calls`` 为准**——
-        ``_pending_calls`` 只是"还没处理的队列"，它并不等于"历史上缺了结果的
-        那些 id"。写操作挂起时连它自己的结果都还没有，只盯着队列就会漏掉它。
+        OpenAI 协议对这段历史有两条硬要求，违反任意一条都是 400：
 
-        返回补了几条，方便调用方和测试断言。
+        1. 带 ``tool_calls`` 的 assistant 消息后面，必须**紧接着**跟满对应数量的
+           ``tool`` 结果（``insufficient tool messages...``）；
+        2. 每条 ``tool`` 结果必须**回应它前面那条 assistant 声明的某个 tool_call**
+           （``Messages with role 'tool' must be a response to a preceding message
+           with 'tool_calls'``）。
 
-        为什么要补而不是删：**删掉 assistant 消息等于篡改排查记录**。
-        补一条"这步没执行完"保留了"它当时确实想查这个"这个事实，
-        而且明确告诉模型别假装看过。宁可多一条诚实的空结果，不要一条假历史。
+        所以这里做三件事：
+          · **补**：声明了但没结果的 → 补一条写明"没执行完"的结果；
+          · **删重**：同一个 tool_call_id 有多条结果的，只留第一条；
+          · **剔孤儿**：前面没有对应 assistant 声明的 tool 消息，剔掉。
+
+        为什么"删"是可以的，而别处反复强调"绝不删改集群数据"：这里删的是
+        **协议层面的重复/孤儿消息**，不是集群证据。而且留着一个非法的历史，
+        整个会话会彻底卡死（发什么都 400），那才是真的把证据埋掉了。
+
+        ``skip`` 里的 tool_call_id 不补——它们**还挂在待批方案上**，
+        结果要由 ``resolve_approval`` 来填。这里补了就会变成两条。
         """
-        idx = -1
-        for i, m in enumerate(self.messages):
-            if m.get("tool_calls"):
-                idx = i
-        if idx < 0:
-            return 0
-
-        wanted: list[tuple[str, str]] = [
-            (tc.get("id"), (tc.get("function") or {}).get("name") or "")
-            for tc in (self.messages[idx].get("tool_calls") or [])
-            if tc.get("id")
-        ]
-        # 紧跟在 assistant 后面的那一段 tool 结果，就是已经回来的
-        j = idx + 1
-        answered: set[str] = set()
-        while j < len(self.messages) and self.messages[j].get("role") == "tool":
-            answered.add(self.messages[j].get("tool_call_id"))
-            j += 1
-
-        note = (
-            "服务在上一轮排查中途重启了，这一步没有执行完。"
-            "需要的话请重新查一次——集群状态可能已经变了。"
-        )
-        inserts = [
-            {"role": "tool", "tool_call_id": tid, "name": name, "content": note}
-            for tid, name in wanted
-            if tid not in answered
-        ]
-        if not inserts:
-            return 0
-        # 插在**已回来的那一段结果之后**，而不是简单追加到末尾——
-        # 末尾可能已经有下一轮的 assistant 消息了，追加会把顺序又弄坏。
-        self.messages[j:j] = inserts
-        return len(inserts)
+        skip = skip or set()
+        keep: list[dict[str, Any]] = []
+        changed = 0
+        i, n = 0, len(self.messages)
+        while i < n:
+            m = self.messages[i]
+            keep.append(m)
+            tcs = m.get("tool_calls") if m.get("role") == "assistant" else None
+            if not tcs:
+                # 不是带 tool_calls 的 assistant：它后面紧跟的 tool 都是孤儿
+                i += 1
+                while i < n and self.messages[i].get("role") == "tool":
+                    changed += 1
+                    i += 1
+                continue
+            wanted = [tc.get("id") for tc in tcs if tc.get("id")]
+            i += 1
+            seen: set[str] = set()
+            while i < n and self.messages[i].get("role") == "tool":
+                tid = self.messages[i].get("tool_call_id")
+                if tid in wanted and tid not in seen:
+                    seen.add(tid)
+                    keep.append(self.messages[i])
+                else:
+                    # 重复结果，或不属于这条 assistant 声明的 id
+                    changed += 1
+                i += 1
+            for tc in tcs:
+                tid = tc.get("id")
+                if not tid or tid in seen or tid in skip:
+                    continue
+                keep.append({
+                    "role": "tool",
+                    "tool_call_id": tid,
+                    "name": (tc.get("function") or {}).get("name") or "",
+                    "content": (
+                        "服务在上一轮排查中途重启了，这一步没有执行完。"
+                        "需要的话请重新查一次——集群状态可能已经变了。"
+                    ),
+                })
+                changed += 1
+        self.messages = keep
+        return changed
 
     def _record_injection(self, tool: str, findings: list[Any]) -> None:
         """记下一次注入检出：进事件流（给人看）、进审计（可回溯）。"""

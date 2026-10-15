@@ -881,3 +881,92 @@ def test_同一工具查到东西就重置落空计数(env):
     notes = [e.data["text"] for e in sess.events if e.type == "note"]
     assert not any("原地打转" in t for t in notes), notes
 
+
+
+# ── 协议修复：重复结果 / 孤儿结果 ─────────────────────────────────────────
+#
+# 上一条不变量（assistant 后面必须跟满 tool 结果）守的是"缺"，
+# 这里守的是反向的两种坏法：**同一条 tool_call 有两条结果**、**结果找不到归属**。
+#
+# 真事：会话在"待批准"状态下被重启，恢复时被判成"上一轮被打断"，
+# 于是补齐逻辑给那条 tool_call 补了一条"没执行完"；之后人再点拒绝，
+# resolve_approval 又补了一条"方案已过期"——同一个 id 两条结果，
+# 此后**发什么都是 400**，会话彻底卡死。用户看到的只是"模型调用失败"。
+
+
+def test_同一条tool_call不许有两条结果():
+    """重复结果必须被剔掉——留着它整个会话就废了。"""
+    from omagent.session import ChatSession as CS
+
+    sess = CS.__new__(CS)
+    sess.messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "查一下"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "get_pods", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "name": "get_pods", "content": "第一次的结果"},
+        {"role": "tool", "tool_call_id": "c1", "name": "get_pods", "content": "重复的第二条"},
+    ]
+    n = sess.repair_orphan_tool_calls()
+    assert n == 1, f"应该剔掉 1 条重复，实际 {n}"
+    ids = [m.get("tool_call_id") for m in sess.messages if m.get("role") == "tool"]
+    assert ids == ["c1"]
+    # 保留**第一条**：它是这条调用当时真实的返回，第二条是后来补的
+    assert "第一次的结果" in sess.messages[3]["content"]
+    assert_tool_calls_paired(sess.messages)
+
+
+def test_找不到归属的tool结果要被剔掉():
+    """前面没有 assistant 声明的 tool 消息是非法的，留着必 400。"""
+    from omagent.session import ChatSession as CS
+
+    sess = CS.__new__(CS)
+    sess.messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "查一下"},
+        {"role": "tool", "tool_call_id": "孤儿", "name": "get_pods", "content": "无主的结果"},
+        {"role": "assistant", "content": "好的"},
+    ]
+    n = sess.repair_orphan_tool_calls()
+    assert n == 1
+    assert not [m for m in sess.messages if m.get("role") == "tool"]
+
+
+def test_待批方案活着时重启_不许把那条tool_call补两次(env):
+    """**这个 bug 的完整复现路径。**
+
+    会话在待批准状态下（磁盘上记的是 thinking）重启：
+      · 状态必须回到 awaiting_approval（方案还活着，界面上的卡片还等人点）
+      · 那条挂着的 tool_call **不能**被补齐逻辑补上——它的结果要由
+        resolve_approval 来填。两条路径都补 → 同一 id 两条结果 → 400。
+    """
+    import json as _json
+
+    agent, _, _ = env
+    sess = build(env, [
+        reply_tools(("rollout_restart", {"namespace": "demo", "name": "api",
+                                         "rationale": "重启以恢复"})),
+        reply_text("好了"),
+    ])
+    sess.send("重启一下")
+    run(sess)
+    assert sess.status == "awaiting_approval"
+    call_id = sess.pending.call_id
+
+    blob = _json.loads(_json.dumps(sess.to_dict(), default=str))
+    blob["status"] = "thinking"          # 模拟"服务是在跑的时候被杀的"
+
+    revived = ChatSession.from_dict("s-z", blob, agent, ScriptedLLM([reply_text("好了")]))
+
+    assert revived.status == "awaiting_approval", "方案还活着，状态就该是等批准"
+    # 此刻那条 tool_call 应该**还没有**结果（等 resolve_approval 填）
+    got = [m.get("tool_call_id") for m in revived.messages if m.get("role") == "tool"]
+    assert call_id not in got, "重启时就把这条补了，之后批准会再补一条"
+
+    revived.resolve_approval(revived.pending.proposal.proposal_id, False, "先别重启")
+    run(revived)
+
+    ids = [m.get("tool_call_id") for m in revived.messages if m.get("role") == "tool"]
+    assert ids.count(call_id) == 1, f"同一条 tool_call 有 {ids.count(call_id)} 条结果：{ids}"
+    assert_tool_calls_paired(revived.messages)
