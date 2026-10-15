@@ -2052,13 +2052,28 @@ class K8sClient:
         return "\n".join(lines)
 
     def _q_events(self, ns: str, params: dict[str, Any]) -> str:
+        """读事件。
+
+        ⚠️ 这里**必须把"总共多少条、给你看的是哪一段"说出来**。
+        真实集群的事件量很大（演示集群的 demo 命名空间就有两千多条），
+        只返回最近 15 条是对的（老的没价值），但**不告诉模型自己被截断了**，
+        它就会把"我没看到"当成"没有发生"——然后在结论里写"事件里没有异常"，
+        而这句话是假的那才是最危险的。
+        """
         events = self.list_events(ns, involved_name=params.get("name", ""))
         if not events:
             return f"命名空间 {ns} 下没有相关事件"
-        return "\n".join(
+        shown = events[:15]
+        lines = [
             f"[{e['type']}] {e['reason']} {e['object']}: {e['message'][:200]}"
-            for e in events[:15]
-        )
+            for e in shown
+        ]
+        if len(events) > len(shown):
+            lines.append(
+                f"（以上是最近 {len(shown)} 条，该范围共有 {len(events)} 条事件。"
+                f"要缩小范围可以传 name 只看某个对象——**不要把'这里没看到'当成'没有发生'**）"
+            )
+        return "\n".join(lines)
 
     def _q_logs(self, ns: str, params: dict[str, Any]) -> str:
         pod = params["pod"]
