@@ -154,6 +154,118 @@ def human_bytes(num: float) -> str:
     return f"{num:.1f} TiB"
 
 
+# ---------------------------------------------------------------------------
+# Chaos Mesh 实验对象
+# ---------------------------------------------------------------------------
+#
+# 为什么**必须直接读对象**，而不是只看事件：
+#
+# 实测（2026-10-16）证明事件这条通道**会漏**，而且漏得有规律：
+#   · `get_events` 只回最近 15 条（按 last_seen 排）。demo 命名空间里
+#     busybox `nc` 单连接模型导致 **42 条 Unhealthy 探针失败事件常年刷新**，
+#     单这一个 reason 就塞满窗口；
+#   · 更糟的是故障自己会制造更多更新的噪音：StressChaos 把 api-gateway 的
+#     CPU 打到限额 → HPA 从 6 扩到 8 → 又产生约 30 条 Pod 调度/创建事件。
+#     实测结果：`StressChaos/om-stress-cpu` 的 8 条事件**排在第 33~40 位**，
+#     模型根本看不到。
+#   · 事件还有 TTL，并且**可以被清理掉**——"静默注入"就是这么做的
+#     （boutique 那次：实验对象还在，命名空间事件被清空，
+#      于是模型读到"没有相关事件"，进而把下游延迟误判成调用方 CPU 限流）。
+#
+# 而实验对象本身是**持久的、数量极少的、不可能被噪音挤掉的**。两者是
+# "可能看不见"和"一定看得见"的区别，所以这里读对象，事件只当补充。
+#
+# 只读，不涉及任何写路径；CRD 没装时返回空列表，绝不报错（没有 Chaos Mesh
+# 的集群里这个功能应当静默消失，而不是让排障工具挂掉）。
+CHAOS_GROUP = "chaos-mesh.org"
+CHAOS_VERSION = "v1alpha1"
+CHAOS_KINDS: tuple[str, ...] = (
+    "NetworkChaos", "StressChaos", "PodChaos", "DNSChaos", "HTTPChaos",
+    "TimeChaos", "IOChaos", "JVMChaos", "KernelChaos", "BlockChaos",
+    "PhysicalMachineChaos",
+)
+
+
+def _chaos_detail(kind: str, spec: dict[str, Any]) -> str:
+    """把不同 kind 的 Chaos 压成一句"它到底在干什么"。
+
+    为什么要分 kind：``spec.action`` 只有 NetworkChaos / PodChaos / DNSChaos
+    这些才有；StressChaos 用的是 ``stressors``，IOChaos 用的是 ``methods``。
+    只读 ``action`` 的话，StressChaos 会渲染成一行**没有动作**的空壳——
+    而"到底是 CPU 打满还是内存打满"恰恰是这个场景最关键的一个词。
+    """
+    action = str(spec.get("action") or "")
+    bits: list[str] = []
+    if kind == "StressChaos":
+        st = spec.get("stressors") or {}
+        cpu = st.get("cpu") or {}
+        mem = st.get("memory") or {}
+        if cpu:
+            bits.append(f"CPU 打满（workers={cpu.get('workers', '?')} "
+                        f"load={cpu.get('load', '?')}）")
+        if mem:
+            bits.append(f"内存压力（workers={mem.get('workers', '?')} "
+                        f"size={mem.get('size', '?')}）")
+    elif kind == "NetworkChaos":
+        if action:
+            bits.append(action)
+        delay = spec.get("delay") or {}
+        loss = spec.get("loss") or {}
+        if delay:
+            bits.append(f"延迟={delay.get('latency', '?')}"
+                        f"（jitter={delay.get('jitter', '0ms')}）")
+        if loss:
+            bits.append(f"丢包={loss.get('loss', '?')}")
+        if action == "partition":
+            bits.append("网络被切断")
+    elif kind in ("PodChaos", "DNSChaos", "HTTPChaos", "TimeChaos") and action:
+        bits.append(action)
+    elif action:
+        bits.append(action)
+    return "  ".join(bits)
+
+
+def _chaos_selector_text(sel: Any) -> str:
+    """把 Chaos 的 selector/target 压成一行人话（标签 + 命名空间）。"""
+    if not isinstance(sel, dict):
+        return ""
+    parts: list[str] = []
+    labels = sel.get("labelSelectors") or {}
+    if isinstance(labels, dict) and labels:
+        parts.append(" ".join(f"{k}={v}" for k, v in sorted(labels.items())))
+    ns = sel.get("namespaces") or []
+    if isinstance(ns, (list, tuple)) and ns:
+        parts.append("ns=" + ",".join(str(x) for x in ns))
+    return " ".join(parts)
+
+
+def _dedupe_by_reason(
+    events: list[dict[str, Any]], *, limit: int = 15, per_reason: int = 3,
+) -> tuple[list[dict[str, Any]], list[tuple[str, int]]]:
+    """按 ``last_seen`` 倒序选事件，但同一个 reason 最多选 ``per_reason`` 条。
+
+    为什么需要：真实集群里"同一件事重复发生"的事件（探针失败、Pod 反复调度）
+    会按新近度把真正稀有的那条（Chaos 注入、HPA 触顶）挤到窗口之外。
+    限制单一 reason 的占比，是让窗口回到"看有多少**种**异常"而不是
+    "看同一件事刷了多少遍"。
+
+    返回 ``(选中的事件, [(被折叠的 reason, 条数), ...])``——被折叠的必须报出来，
+    否则就等于把截断藏起来，那正是这个函数要修的那个毛病。
+    """
+    kept: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
+    folded: dict[str, int] = {}
+    for e in events:
+        reason = e.get("reason") or "-"
+        if seen.get(reason, 0) < per_reason:
+            seen[reason] = seen.get(reason, 0) + 1
+            if len(kept) < limit:
+                kept.append(e)
+        else:
+            folded[reason] = folded.get(reason, 0) + 1
+    return kept, sorted(folded.items(), key=lambda kv: -kv[1])
+
+
 class K8sClient:
     """参数化的 K8s 访问封装。"""
 
@@ -500,6 +612,101 @@ class K8sClient:
             )
         out.sort(key=lambda x: (x["last_seen"] or ""), reverse=True)
         return out
+
+    def chaos_experiments(self, namespace: str) -> list[dict[str, Any]]:
+        """列出命名空间里**正在生效**的 Chaos Mesh 实验（只读）。
+
+        为什么要有这个方法，见上面 ``CHAOS_KINDS`` 那段：事件通道会被探针噪音
+        和故障自身制造的扰动挤爆、还会过期、还能被清掉；实验对象不会。
+        这是"这个命名空间里有没有人在注入故障"的**权威来源**。
+
+        拿不到（没装 Chaos Mesh / 没权限 / CRD 版本不同）一律返回空列表：
+        没有 Chaos Mesh 的集群里，这个能力应该静默消失，而不是让排障工具报错。
+        """
+        out: list[dict[str, Any]] = []
+        for kind in CHAOS_KINDS:
+            try:
+                # ⚠️ 第 4 个位置参数是 **plural（小写）**，不是 Kind。
+                # 传 "StressChaos" 会 404，而 404 又被下面的 except 当成
+                # "这个 CRD 没装"吞掉——于是功能静默失效，看起来像"集群里没实验"。
+                # 这正是本次要修的那类错误（把"没查到"当成"没有"），
+                # 所以这里显式小写并留了测试盯着。
+                resp = self.custom.list_namespaced_custom_object(
+                    CHAOS_GROUP, CHAOS_VERSION, namespace, kind.lower())
+            except Exception:  # noqa: BLE001
+                # 404 是"这个 CRD 没装"，403 是"没给权限"，都属于正常情况。
+                # 其余异常也不该让整个排查查询挂掉。
+                continue
+            for item in (resp or {}).get("items") or []:
+                spec = item.get("spec") or {}
+                meta = item.get("metadata") or {}
+                status = item.get("status") or {}
+                injected = recovered = False
+                for cond in status.get("conditions") or []:
+                    if cond.get("type") == "AllInjected" and cond.get("status") == "True":
+                        injected = True
+                    if cond.get("type") == "AllRecovered" and cond.get("status") == "True":
+                        recovered = True
+                out.append({
+                    "kind": kind,
+                    "name": meta.get("name", ""),
+                    "action": spec.get("action", ""),
+                    "detail": _chaos_detail(kind, spec),
+                    "mode": spec.get("mode", ""),
+                    "duration": spec.get("duration", ""),
+                    "created": str(meta.get("creationTimestamp") or ""),
+                    # 已恢复的实验对象会留一段时间（duration 到了之后仍存在），
+                    # 不能把它当成"故障还在"——那是另一种误导。
+                    "active": injected and not recovered,
+                    "selector": _chaos_selector_text(spec.get("selector")),
+                    "target": _chaos_selector_text(spec.get("target")),
+                })
+        out.sort(key=lambda x: (x["created"], x["name"]))
+        return out
+
+    def chaos_section(self, namespace: str) -> str:
+        """把活跃的 Chaos 实验渲染成一段给模型看的文字。
+
+        **没有活跃实验时返回空字符串**——这样把它挂进 get_workload /
+        get_events 不会给那 22 个非 chaos 剧本增加任何噪音，也就不会有回归。
+        """
+        try:
+            experiments = self.chaos_experiments(namespace)
+        except Exception:  # noqa: BLE001
+            return ""
+        if not experiments:
+            return ""
+        active = [e for e in experiments if e["active"]]
+        listed = active or experiments
+        head = (
+            f"⚠️ 这个命名空间里有 {len(active)} 个 Chaos Mesh 实验**正在注入故障**"
+            "（这不是猜测：实验对象就在集群里，下面是从对象本身读到的）："
+            if active else
+            f"注意：这个命名空间里有 {len(experiments)} 个 Chaos Mesh 实验对象，"
+            "但状态显示**都已恢复/未注入**——不要把它当成当前故障的原因："
+        )
+        lines = [head]
+        for e in listed:
+            bits = [f"{e['kind']}/{e['name']}"]
+            if e.get("detail"):
+                bits.append(e["detail"])
+            elif e["action"]:
+                bits.append(f"action={e['action']}")
+            if e["selector"]:
+                bits.append(f"选择={e['selector']}")
+            if e["target"]:
+                bits.append(f"对端={e['target']}")
+            if e["duration"]:
+                bits.append(f"duration={e['duration']}")
+            if e["created"]:
+                bits.append(f"创建于={e['created'][:19]}")
+            bits.append("状态=注入中" if e["active"] else "状态=已恢复")
+            lines.append("  " + "  ".join(bits))
+        lines.append(
+            "  （Chaos 注入的是**运行时**故障：工作负载的 spec、探针、Endpoints "
+            "全是正常的。重启/扩容/改配置都撤不掉它——要先处理这个实验对象。）"
+        )
+        return "\n".join(lines)
 
     def _read_log(self, pod: str, namespace: str, container: str, tail: int, previous: bool) -> str:
         """读取容器日志，绕开客户端对 text/plain 的错误反序列化。
@@ -2054,25 +2261,47 @@ class K8sClient:
     def _q_events(self, ns: str, params: dict[str, Any]) -> str:
         """读事件。
 
-        ⚠️ 这里**必须把"总共多少条、给你看的是哪一段"说出来**。
-        真实集群的事件量很大（演示集群的 demo 命名空间就有两千多条），
-        只返回最近 15 条是对的（老的没价值），但**不告诉模型自己被截断了**，
-        它就会把"我没看到"当成"没有发生"——然后在结论里写"事件里没有异常"，
-        而这句话是假的那才是最危险的。
+        ⚠️ 两件事必须同时做到，否则模型会把"我没看到"当成"没有发生"：
+
+        1. **说清楚被截断了多少**（原来只有这一条）。
+        2. **别让单一 reason 吃光窗口**。实测（2026-10-16）：demo 命名空间里
+           busybox `nc` 单连接模型常年刷新 42 条 `Unhealthy` 探针失败事件，
+           光这一个 reason 就超过 15 条的窗口；StressChaos 注入后 HPA 又扩了
+           2 个副本，多出约 30 条更新的事件，结果 `StressChaos/om-stress-cpu`
+           的 8 条事件被挤到**第 33~40 位**，模型完全看不到——于是把
+           "CPU 被人打满" 误判成 "CPU 限额设小了"，提了 patch_resources。
+           现在按 reason 去重（同一 reason 最多 3 条），稀有 reason 才有机会露头。
+
+        ⚠️ 但**去重只是缓解，不是根治**：事件会过期、还能被人清空
+        （"静默注入"就是这么干的：实验对象还在，命名空间事件被清空，
+         模型读到"没有相关事件"）。所以活跃的 Chaos 实验**另走对象直读**，
+        见 ``chaos_section``——那段不受窗口大小和 TTL 影响。
         """
         events = self.list_events(ns, involved_name=params.get("name", ""))
-        if not events:
-            return f"命名空间 {ns} 下没有相关事件"
-        shown = events[:15]
-        lines = [
-            f"[{e['type']}] {e['reason']} {e['object']}: {e['message'][:200]}"
-            for e in shown
-        ]
-        if len(events) > len(shown):
-            lines.append(
-                f"（以上是最近 {len(shown)} 条，该范围共有 {len(events)} 条事件。"
-                f"要缩小范围可以传 name 只看某个对象——**不要把'这里没看到'当成'没有发生'**）"
-            )
+        lines: list[str] = []
+        if events:
+            shown, folded = _dedupe_by_reason(events, limit=15, per_reason=3)
+            lines += [
+                f"[{e['type']}] {e['reason']} {e['object']}: {e['message'][:200]}"
+                for e in shown
+            ]
+            if len(events) > len(shown):
+                extra = ""
+                if folded:
+                    extra = ("（同因折叠：" +
+                             "、".join(f"{r}×{n}" for r, n in folded[:5]) + "）")
+                lines.append(
+                    f"（以上是最近 {len(shown)} 条，该范围共有 {len(events)} 条事件。"
+                    f"{extra}"
+                    f"要缩小范围可以传 name 只看某个对象——"
+                    f"**不要把'这里没看到'当成'没有发生'**）"
+                )
+        else:
+            lines.append(f"命名空间 {ns} 下没有相关事件")
+
+        chaos = self.chaos_section(ns)
+        if chaos:
+            lines.append(chaos)
         return "\n".join(lines)
 
     def _q_logs(self, ns: str, params: dict[str, Any]) -> str:
@@ -2128,6 +2357,13 @@ class K8sClient:
                     out.append(extra)
             except Exception:  # noqa: BLE001
                 pass   # 变更摘要拿不到不该让整个查询失败
+        # 活跃的 Chaos 实验也挂在这里——和上面"最近变更"是同一个理由：
+        # get_workload 几乎每个剧本都会调，信息放在这里**不依赖模型的自觉**。
+        # 实测教训：stress 的 3 次里有一次**从头到尾没调过 get_events**
+        # （它读了 metrics/日志/ConfigMap 就下了结论），事件通道里再全也白搭。
+        chaos = self.chaos_section(ns)
+        if chaos:
+            out.append(chaos)
         return "\n".join(out)
 
     def _q_services(self, ns: str, params: dict[str, Any]) -> str:

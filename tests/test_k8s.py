@@ -653,3 +653,219 @@ def test_canary_abort_没有金丝雀被拒():
     with pytest.raises(ActionRejected, match="没有可放弃"):
         _bare(apps)._canary_abort("demo", "api-gateway", {}, "All")
     assert apps.ops("scale_deployment") == [], "被拒的请求不该真的发出去"
+
+
+# ---------------------------------------------------------------------------
+# Chaos 实验对象**直读**
+#
+# 这一组钉的是 2026-10-16 实测出来的一个真实可诊断性缺陷：
+#   `StressChaos/om-stress-cpu` 注入后确实在 demo 命名空间写了 8 条事件，
+#   但它们排在**第 33~40 位**——前面是 42 条常年刷新的 `Unhealthy` 探针失败
+#   事件（busybox `nc` 单连接模型的固有噪音），再加上故障自己触发的 HPA
+#   扩容产生的约 30 条 Pod 调度/创建事件。`get_events` 只看最近 15 条，
+#   于是"事件里有自白书"这句话在**这个故障上不成立**：模型 3 次里错 2 次
+#   （一次提了 patch_resources 把限额当根因）。
+#
+# 修法不是继续调窗口大小，而是认清两件事：
+#   · 事件通道会被噪音挤爆、会过期、**还能被清空**（"静默注入"就是这么干的）；
+#   · 实验对象是持久的、量极少的、挤不掉的。
+# 所以直接读对象，并把它挂进 `get_workload`——**每个剧本都会调**的那一个。
+# （stress 的第 3 次从头到尾没调过 get_events，只挂在事件上照样漏。）
+# ---------------------------------------------------------------------------
+
+
+class _CustomObjects:
+    """伪造 CustomObjectsApi。
+
+    ⚠️ 只认**小写 plural**（``stresschaos``）。真实客户端第 4 个位置参数就是
+    plural，传 Kind 会 404，而 404 又会被"CRD 没装就静默跳过"的逻辑吞掉——
+    我们**已经踩过一次**：功能看起来正常，实际永远返回空列表。
+    所以这里记录每次收到的 plural，供断言盯着。
+    """
+
+    def __init__(self, items_by_plural):
+        self._items = items_by_plural
+        self.plural_seen: list[str] = []
+
+    def list_namespaced_custom_object(self, group, version, namespace, plural):
+        self.plural_seen.append(plural)
+        if plural not in self._items:
+            raise ApiException(status=404, reason="the server could not find the requested resource")
+        return {"items": self._items[plural]}
+
+
+class _Ev:
+    def __init__(self, reason, ts, message="m", type_="Warning",
+                 name="pod-x", kind="Pod"):
+        self.type = type_
+        self.reason = reason
+        self.involved_object = SimpleNamespace(kind=kind, name=name)
+        self.message = message
+        self.count = 1
+        self.last_timestamp = ts
+        self.event_time = None
+
+
+class _EvCore:
+    def __init__(self, items):
+        self._items = items
+
+    def list_namespaced_event(self, namespace):
+        return SimpleNamespace(items=list(self._items))
+
+
+def _chaos_client(items_by_plural, events=()):
+    obj = object.__new__(K8sClient)
+    obj.custom = _CustomObjects(items_by_plural)
+    obj.core = _EvCore(list(events))
+    return obj
+
+
+def _stress_item(name="om-stress-cpu", injected=True):
+    cond = [{"type": "AllInjected", "status": "True"}] if injected else [
+        {"type": "AllInjected", "status": "True"},
+        {"type": "AllRecovered", "status": "True"},
+    ]
+    return {
+        "metadata": {"name": name, "creationTimestamp": "2026-10-16T07:40:24Z"},
+        "spec": {
+            "stressors": {"cpu": {"workers": 2, "load": 100}},
+            "mode": "all",
+            "duration": "10m",
+            "selector": {"labelSelectors": {"app": "api-gateway"},
+                         "namespaces": ["demo"]},
+        },
+        "status": {"conditions": cond},
+    }
+
+
+def test_chaos_实验用小写_plural_查():
+    """第 4 个位置参数是 plural，不是 Kind——传错会 404 并被静默吞掉。"""
+    obj = _chaos_client({"stresschaos": [_stress_item()]})
+    found = obj.chaos_experiments("demo")
+    assert "stresschaos" in obj.custom.plural_seen
+    assert "StressChaos" not in obj.custom.plural_seen, \
+        "又用 Kind 当 plural 了：真实 API 会 404，然后被当成'没装 CRD'静默吞掉"
+    assert [e["kind"] for e in found] == ["StressChaos"]
+    assert found[0]["active"] is True
+
+
+def test_chaos_没装_CRD_时返回空列表而不是报错():
+    """没有 Chaos Mesh 的集群里，这个能力应该静默消失，不能让排障工具挂掉。"""
+    obj = _chaos_client({})
+    assert obj.chaos_experiments("demo") == []
+    assert obj.chaos_section("demo") == ""
+
+
+def test_chaos_section_没有活跃实验时是空串():
+    """22 个非 chaos 剧本不许因为这个改动多出任何噪音（零回归）。"""
+    obj = _chaos_client({"stresschaos": []})
+    assert obj.chaos_section("demo") == ""
+
+
+def test_chaos_section_把注入中的实验连同它在干什么讲出来():
+    obj = _chaos_client({"stresschaos": [_stress_item()]})
+    text = obj.chaos_section("demo")
+    assert "正在注入故障" in text
+    assert "StressChaos/om-stress-cpu" in text
+    # 光说"有个 chaos 对象"不够——要说清它把**什么**打满了，
+    # 否则判定用的 "chaos"+"cpu" 里那个 cpu 还是没着落。
+    assert "CPU" in text and "workers=2" in text
+    assert "app=api-gateway" in text
+    assert "注入中" in text
+
+
+def test_chaos_section_已恢复的实验不会被当成当前根因():
+    """duration 到了之后对象还会留一阵。把它说成"当前故障"是另一种编造。"""
+    obj = _chaos_client({"stresschaos": [_stress_item(injected=False)]})
+    text = obj.chaos_section("demo")
+    assert "已恢复" in text
+    assert "不要把它当成当前故障的原因" in text
+    assert "正在注入故障" not in text
+
+
+def test_chaos_section_network_delay_会说出延迟多少():
+    from omagent.k8s import _chaos_detail
+
+    detail = _chaos_detail("NetworkChaos", {
+        "action": "delay",
+        "delay": {"latency": "1s", "jitter": "0ms"},
+    })
+    assert "delay" in detail and "1s" in detail
+
+    part = _chaos_detail("NetworkChaos", {"action": "partition"})
+    assert "网络被切断" in part
+
+
+def test_get_events_窗口被噪音塞满时仍然给出_chaos():
+    """核心回归：**事件窗口被噪音占满**是本缺陷的触发条件。
+
+    这里如实复刻实测到的比例：42 条 `Unhealthy` + 故障自己触发的扩容噪音，
+    Chaos 的 8 条事件全在窗口之外。断言的是：即使窗口里一条 chaos 事件都没有，
+    模型也必须从 `get_events` 里看到实验对象。
+    """
+    events = [
+        _Ev("Unhealthy", f"2026-10-16T07:{40 + i % 20:02d}:00Z", name=f"pod-{i}")
+        for i in range(42)
+    ]
+    events += [
+        _Ev("Scheduled", "2026-10-16T07:41:00Z", name="api-gateway-new", type_="Normal"),
+        _Ev("Pulled", "2026-10-16T07:41:01Z", name="api-gateway-new", type_="Normal"),
+        _Ev("Created", "2026-10-16T07:41:02Z", name="api-gateway-new", type_="Normal"),
+        # 实验对象**比这些噪音都旧**——所以按新近度它永远进不了前 15
+        _Ev("Applied", "2026-10-16T07:40:24Z", name="om-stress-cpu",
+            kind="StressChaos", type_="Normal", message="Successfully apply chaos"),
+    ]
+    obj = _chaos_client({"stresschaos": [_stress_item()]}, events=events)
+
+    out = obj._q_events("demo", {})
+    assert "StressChaos/om-stress-cpu" in out, \
+        "事件窗口被噪音占满时，Chaos 信号又丢了——这正是 stress 3 次里错 2 次的原因"
+    assert "正在注入故障" in out
+    # 截断仍然要如实报出来（原来那条不变量不能因为这次改动丢）
+    assert "共有 46 条事件" in out
+    assert "同因折叠" in out and "Unhealthy×39" in out
+
+
+def test_get_workload_会带上活跃的_chaos_实验():
+    """stress 的第 3 次**从头到尾没调 get_events**。
+
+    只把信号挂事件上，那次照样漏。所以必须挂在每个剧本都会调的
+    `get_workload` 上——这个测试盯的就是"不依赖模型自觉"这条设计约束。
+    """
+    obj = object.__new__(K8sClient)
+    obj.custom = _CustomObjects({"stresschaos": [_stress_item()]})
+    wl = SimpleNamespace(
+        metadata=SimpleNamespace(labels={"app": "api-gateway"}),
+        spec=SimpleNamespace(
+            replicas=8,
+            template=SimpleNamespace(spec=SimpleNamespace(
+                containers=[SimpleNamespace(
+                    name="app", image="om-demo-app:1",
+                    resources=SimpleNamespace(
+                        limits={"cpu": "200m", "memory": "128Mi"},
+                        requests={"cpu": "50m", "memory": "32Mi"}),
+                )],
+                node_selector={},
+            )),
+        ),
+    )
+    obj.read_workload = lambda ns, kind, name: wl
+    out = obj._q_workload("demo", {"name": "api-gateway"})
+    assert "StressChaos/om-stress-cpu" in out
+    assert "CPU 打满" in out
+
+
+def test_dedupe_限制单一原因占比并如实报出折叠():
+    from omagent.k8s import _dedupe_by_reason
+
+    events = ([{"reason": "Unhealthy", "type": "Warning", "object": "Pod/a",
+                "message": "x", "last_seen": "2026-10-16T07:00:00Z"}] * 10
+              + [{"reason": "Applied", "type": "Normal", "object": "StressChaos/x",
+                  "message": "y", "last_seen": "2026-10-16T06:00:00Z"}])
+    kept, folded = _dedupe_by_reason(events, limit=15, per_reason=3)
+    assert len(kept) == 4
+    assert [e["reason"] for e in kept].count("Unhealthy") == 3
+    # 稀有原因必须露头——哪怕它更旧
+    assert any(e["reason"] == "Applied" for e in kept)
+    assert folded == [("Unhealthy", 7)]

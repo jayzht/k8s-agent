@@ -49,7 +49,7 @@ from .tools import (
 #
 # 只读不受此限制：排查问题时需要看 kube-system。
 # ---------------------------------------------------------------------------
-WRITE_NAMESPACES: tuple[str, ...] = ("demo", "staging")
+WRITE_NAMESPACES: tuple[str, ...] = ("demo", "staging", "core")
 
 
 class GateViolation(RuntimeError):

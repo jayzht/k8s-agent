@@ -493,3 +493,114 @@ def test_noissue_没有靠题干泄题去绕开历史():
     q = sc.question.lower()
     for leak in ("测试", "评测", "上一轮", "注入", "历史", "chaos", "prometheus", "loki"):
         assert leak.lower() not in q, f"noissue 题干泄题：{leak!r}"
+
+
+# ---------------------------------------------------------------------------
+# 缺陷 C：`noissue` 被前置检查**永久跳过**（所以"不编造故障"从来没有实测数字）
+#
+# 上一轮给 `noissue` 加了 `quiet_cluster` 前置检查（近期有 Pod 新建 / 重启 /
+# 扰动事件 → 跳过）。设计意图是对的（绝不静默假 PASS），但实测 **3/3 全部命中**：
+# 评测每跑一个场景都会 `faults.sh reset`，而 reset 会把 **demo + staging +
+# observability 的全部工作负载删掉重建**——"近期有扰动"永远成立。
+#
+# 修法：把这条剧本挪到一个**评测从不重建**的命名空间（`core`，
+# 见 sandbox/topology.py）。下面三个测试是护栏，防止它被改回去。
+# ---------------------------------------------------------------------------
+
+
+def _reset_rebuilt_namespaces() -> set[str]:
+    """从 ``faults.sh`` 里解析出 reset 会**删掉重建**哪些命名空间。
+
+    刻意去读脚本而不是在测试里抄一份常量：抄的那份会漂移，
+    而漂移的后果正是"剧本又被永久跳过"——那是这个缺陷本身。
+    """
+    import re
+    from omagent.config import ROOT
+
+    src = (ROOT / "sandbox" / "faults.sh").read_text(encoding="utf-8")
+    m = re.search(r"for f in ([0-9]{2}-[a-z-]+(?: [0-9]{2}-[a-z-]+)*); do\s*\n"
+                  r"\s*kubectl delete -f", src)
+    assert m, "faults.sh 的 reset 删除清单变了，护栏测试需要跟着更新"
+    return {tok.split("-", 1)[1] for tok in m.group(1).split()}
+
+
+def test_noissue_跑在评测自己不重建的命名空间上():
+    """核心护栏：noissue 的命名空间**不能**是 reset 会删建的那几个。
+
+    否则前置检查 3/3 命中，剧本永久跳过，"不编造故障"永远没有实测数字。
+    """
+    sc = next(s for s in SCENARIOS if s.name == "noissue")
+    rebuilt = _reset_rebuilt_namespaces()
+    assert rebuilt == {"demo", "staging", "observability"}, \
+        f"reset 重建的命名空间变了：{rebuilt}"
+    assert sc.namespace not in rebuilt, (
+        f"noissue 又跑回 reset 会删建的命名空间 {sc.namespace!r} 了——"
+        "前置检查会 3/3 全部命中，剧本被永久跳过")
+
+
+def test_noissue_那个命名空间评测真的从不碰():
+    """反过来验一遍：那个命名空间**不在** reset 的删除清单里。
+
+    同时确认它确实被生成出来了（否则前置检查会因为"查不到 Pod"而 fail closed，
+    变成另一种永久跳过）。
+    """
+    from omagent.config import ROOT
+
+    sc = next(s for s in SCENARIOS if s.name == "noissue")
+    manifests = sorted((ROOT / "sandbox" / "manifests").glob("*.yaml"))
+    owner = [p for p in manifests
+             if f"namespace: {sc.namespace}" in p.read_text(encoding="utf-8")]
+    assert owner, f"没有任何清单文件包含 namespace: {sc.namespace}"
+    # 它的文件名前缀不能是 reset 删掉的那三个
+    for p in owner:
+        assert not p.name.startswith(("10-", "20-", "30-")), \
+            f"{p.name} 会被 reset 删掉重建，把 noissue 挪出这个文件"
+
+
+def test_noissue_的命名空间在写白名单里():
+    """否则"编造出来的写动作"会被命名空间护栏**静默拒掉**，看起来像没提。
+
+    这是个很隐蔽的假 PASS：`allow_none=True` + `proposed=None` 会判动作正确，
+    而模型其实刚刚编了一个故障、还提了修改。护栏里少一个命名空间，
+    这条评测就从"考不编造"变成"考不到"。
+    """
+    from omagent.agent import WRITE_NAMESPACES
+
+    sc = next(s for s in SCENARIOS if s.name == "noissue")
+    assert sc.namespace in WRITE_NAMESPACES, (
+        f"{sc.namespace!r} 不在 WRITE_NAMESPACES {WRITE_NAMESPACES} 里——"
+        "模型针对它提的写动作会被静默拒绝，判据会把'编造了故障'读成'没提'")
+
+
+def _manifest_with_namespace(ns: str) -> str:
+    from omagent.config import ROOT
+
+    for p in sorted((ROOT / "sandbox" / "manifests").glob("*.yaml")):
+        text = p.read_text(encoding="utf-8")
+        if f"namespace: {ns}" in text:
+            return text
+    raise AssertionError(f"没有清单文件包含 namespace: {ns}")
+
+
+def test_noissue_的命名空间用的是_tcp_探针():
+    """护栏：core 必须用 tcpSocket 探针，否则 Unhealthy 噪音会再次永久跳过它。
+
+    实测（各 2 副本跑 5 分钟）：httpGet 打在 `nc` 单连接模型上 → 1 条
+    Unhealthy；tcpSocket → 0 条。`Unhealthy` 在前置检查的扰动清单里，
+    有一条就够让剧本继续被跳过。
+    """
+    sc = next(s for s in SCENARIOS if s.name == "noissue")
+    text = _manifest_with_namespace(sc.namespace)
+    assert "tcpSocket" in text, \
+        "core 的探针又被改回 httpGet 了——它会持续产生 Unhealthy，剧本会被永久跳过"
+    assert "httpGet" not in text
+
+
+def test_demo_的_http_探针噪音没有被顺手删掉():
+    """反面护栏：demo/staging 必须继续用 httpGet。
+
+    那份 Unhealthy 噪音是故障注入剧本里**有价值的干扰项**（模型的注意力
+    会被它拉走）。修 noissue 的时候把它一起去掉，等于顺手把题目改简单了。
+    """
+    demo = _manifest_with_namespace("demo")
+    assert "httpGet" in demo and "tcpSocket" not in demo

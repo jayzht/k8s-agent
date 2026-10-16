@@ -970,3 +970,20 @@ def test_待批方案活着时重启_不许把那条tool_call补两次(env):
     ids = [m.get("tool_call_id") for m in revived.messages if m.get("role") == "tool"]
     assert ids.count(call_id) == 1, f"同一条 tool_call 有 {ids.count(call_id)} 条结果：{ids}"
     assert_tool_calls_paired(revived.messages)
+
+
+def test_提醒里必须留出_不需要变更_这个出口():
+    """护栏：nudge 不能只教「提哪些」，也得教「可以不提」。
+
+    ⚠️ 这是实测出来的：`noissue`（集群本来健康）里模型**连续 3 次**都先给出了
+    正确结论（"这里没有故障，也没有需要提的变更"），只因为顺口问了一句
+    "要不要动，你定" 就命中了触发条件，被这条提醒催着提了一张它自己上一段
+    刚说过"不急"的卡片。评测据此判它"编造故障"——而那张卡片是提醒制造的。
+
+    少这一句，"不编造故障"这条剧本量的就不是模型，而是这条提醒。
+    """
+    from omagent.session import NUDGE
+
+    assert "不需要任何变更" in NUDGE, \
+        "nudge 又变成只教「提哪些」了——noissue 会重新变成在量这条提醒而不是量模型"
+    assert "不要为了响应这条提醒去凑一张卡片" in NUDGE.replace("**", "")

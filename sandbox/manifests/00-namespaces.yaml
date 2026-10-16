@@ -30,3 +30,13 @@ metadata:
     omagent.io/managed: "true"
   annotations:
     omagent.io/note: "监控组件"
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: core
+  labels:
+    omagent.io/managed: "true"
+  annotations:
+    omagent.io/note: "核心服务：长期稳定"

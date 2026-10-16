@@ -258,6 +258,16 @@ spec:
         #
         # 沙箱集群有 5×128Gi 的余量，所以这里两头都调：
         # 保留期收到 6h（演示够用，WAL 小一个量级），内存给到 2Gi。
+        #
+        # ⚠️ 2026-10-16 实测：2Gi **仍然不够**，它再次陷入 OOM 崩溃循环
+        # （restarts=133，每次起来约 18s 就在 WAL replay 里被杀，Service 的
+        #  Endpoints 因此长期为空 → `query_metrics` 全部 503）。
+        # 根因和上次同源，但触发条件更隐蔽：emptyDir 里的 WAL 会**跨容器重启累积**
+        # （重启不清盘），而 Prometheus 每次都没活到做 checkpoint 就被杀，
+        # 于是 WAL 越攒越多 → 重放需要的内存越来越大 → 下一轮更容易被杀。
+        # 这是个正反馈，一旦进入就再也出不来。
+        # 处置：内存给到 4Gi（5×128Gi 余量下代价可忽略），并在坏掉时**删 Pod**
+        # 让 emptyDir 归零（见 docs / 运维说明），而不是继续加大内存。
         - --storage.tsdb.retention.time=6h
         - --web.listen-address=:9090
         # 没有这行就没有 POST /-/reload，也不保证 lifecycle 相关端点可用
@@ -286,7 +296,9 @@ spec:
             cpu: "1"
             # 2Gi 而不是 1Gi：启动时重放 WAL 是内存峰值，不是稳态。
             # 1Gi 会让它在跑了几小时后陷入 OOM → 重放 → OOM 的死循环。
-            memory: 2Gi
+            # 4Gi：2Gi 在 2026-10-16 实测中同样死在重放上（restarts=133）。
+            # 这个数是**实测调出来的**，不是拍的——见上面 retention 那段注释。
+            memory: 4Gi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
